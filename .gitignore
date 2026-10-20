@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+# market data, model outputs and per-signal results stay private
+results/
+*.pkl
+*.png
+!docs/img/*.png
+.playwright-mcp/
+data/

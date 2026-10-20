@@ -1,0 +1,21 @@
+# CPU-only. Torch: pip install torch --index-url https://download.pytorch.org/whl/cpu
+numpy>=1.26
+pandas>=2.2
+scipy
+scikit-learn
+streamlit>=1.40
+plotly
+pillow
+mplfinance
+ultralytics>=8.3
+huggingface_hub
+torch
+# forecasters (Kronos runs from its cloned repo, see scripts/setup_vendor.sh)
+chronos-forecasting>=2.0
+timesfm[torch]>=2.5   # optional, ~2 GB RAM
+einops
+safetensors
+# repo-specific extras
+bokeh      # pytrendline imports it
+colour     # pytrendline
+tqdm       # chart_patterns
