@@ -43,7 +43,8 @@ flowchart LR
 ![Benchmark](docs/img/benchmark.png)
 
 - **Raw patterns are noise on Indian large caps.** No rule-based or YOLO repo beats holding the stock once its lookahead is removed.
-- **The forecasters (Kronos, Chronos, TimesFM) predict mostly drift**, so their directional edge is small and not statistically significant.
+- **The forecasters (Chronos, TimesFM) predict mostly drift**, so their directional edge is small and not statistically significant.
+- **Kronos is the most promising forecaster.** Over 1,004 forecasts its rank IC is 0.18, but the result is not yet significant (t ≈ 0.9).
 - **PatternEdge earns +61 bps per 10-day signal on NSE500** (+51 bps for longs only), with t ≈ 19.
 
 ![PatternEdge deciles](docs/img/edge_deciles.png)
