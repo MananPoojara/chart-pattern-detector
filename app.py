@@ -103,7 +103,13 @@ def run_forecast(repo, ticker, _df, h):
     return forecast.forecast(repo, [_df], h)[0]
 
 
-tab_run, tab_bench = st.tabs(["Run", "Benchmark (Indian data)"])
+tab_plan, tab_run, tab_bench = st.tabs(["Trade plan", "Run a repo", "Benchmark (Indian data)"])
+
+with tab_plan:
+    from cpd import plan_ui
+
+    plan_ui.render(ticker if df is not None and src == "Indian market data" else "RELIANCE")
+
 
 with tab_run:
     if kind == "vision" and src == "Upload chart image":

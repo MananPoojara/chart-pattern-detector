@@ -2,21 +2,25 @@
     Chart-Pattern-Detector
 </h1>
 
-Every open-source chart-pattern model in one app, tested honestly on Indian market data, plus **PatternEdge**, a model that learns *when* patterns are worth trading.
+Every open-source chart-pattern model in one app, tested honestly on Indian market data, plus **TradePlan**: pick an NSE stock or upload a chart screenshot and get entry, stop, target, probability and the reasons, all backed by a real out-of-sample track record.
 
-![App](docs/img/app_rules.png)
+![Trade plan](docs/img/app_tradeplan.png)
 
 ## What we built
 
 1. **One app** (`streamlit run app.py`): pick a repo, pick any NSE stock or index (or upload a CSV or chart image), and see its detections or forecast.
 2. **One fair benchmark**: every repo is scored the same way on NSE data, 2018 → 2026. The signal is known at the close, you enter at the next open and exit 10 bars later, and the result is measured against simply holding the stock.
 3. **PatternEdge**: 300 pattern detectors plus market context, fed to gradient boosting and validated walk-forward.
+4. **ChartCNN**: a chart-image model that *predicts* instead of detecting (Jiang, Kelly & Xiu 2023), trained on NSE charts.
+5. **TradePlan**: PatternEdge + ChartCNN turned into a trade plan, for an NSE stock or for any chart screenshot.
 
 ```mermaid
 flowchart LR
     D[(NSE data)] --> R[Rule detectors] & V[YOLO on chart images] & F[Forecast models]
     R & V & F --> S[Signals known at close t] --> B[Benchmark]
-    R --> P[PatternEdge] --> S
+    R --> P[PatternEdge] --> T[TradePlan]
+    C[ChartCNN] --> T
+    I[Your screenshot] --> G[Candle reader] --> T
 ```
 
 ## The repos
@@ -37,6 +41,40 @@ flowchart LR
 | [big-data-stock-price-forecast](https://github.com/nsarang/big-data-stock-price-forecast) | VAE + nearest past windows | no matching on overlapping windows |
 | [TimeSeries2DBarChartImageCNN](https://github.com/omerbsezer/TimeSeries2DBarChartImageCNN) | CNN on bar images | not runnable (no weights) |
 | [OHLC_Candlestick_Patterns](https://github.com/przemyslawbak/OHLC_Candlestick_Patterns) | C# rules | not runnable (.NET); covered by ta_patterns |
+
+## TradePlan: from detecting to predicting
+
+**Why it was needed.** ChartScanAI, foduucom and similar tools *detect*. Their training boxes were drawn by people who already knew what happened next, so on the newest candle they almost never fire, and when they do they're wrong. We tested ChartScanAI at the right edge: a 33–44% hit rate and negative returns. Paid tools like BullGPT return entry, stop and target from a screenshot, but publish no track record. Research on vision AI models reading candlestick charts finds them at 49–53%, close to a coin flip ([Hu et al. 2026](https://arxiv.org/abs/2604.12659)).
+
+**What we built instead.** Every number below is learned from what happened *after* the chart and tested on years the model never saw.
+
+| Piece | How it works |
+|---|---|
+| **ChartCNN** | 20-day black-and-white chart images (OHLC bars, 20-day average, volume), as in [Jiang, Kelly & Xiu 2023](https://doi.org/10.1111/jofi.13268). The label is "did this stock beat the day's average NSE500 stock over the next 10 days?". Trained on 2005–2010 only, then tested 2013–2026: **51.8% accuracy, rank IC 0.031**. The paper found US-trained models fail in India, so this one is trained locally. |
+| **Trade levels** | Entry at the next open, stop 1.5 ATR below, target 2.5 ATR above, exit after 10 bars otherwise. Labels use this exact triple-barrier rule (López de Prado); if both levels are touched on the same bar, it counts as a stop. |
+| **Models** | Gradient boosting on context, the 300 pattern events and ChartCNN, predicting both P(target before stop) and expected R. Costs of 0.3% per trade (STT, charges, slippage) are charged in R for each stock. |
+| **Honest numbers** | Stocks are ranked each day. The probability and expected R shown in the app are what plans of the *same rank* actually earned in 2018–2026, because the raw model was about 0.1 R too optimistic. Only ranks whose history beats costs get **BUY**; everything else is **NO TRADE**. |
+| **Screenshot path** | A colour-based candle reader pulls OHLC and volume out of a TradingView or broker screenshot; on test renders it matches the real candles at 0.9999 correlation. A separate model uses only what a picture can show (shapes in ATR units plus ChartCNN), and the plan lines are drawn on your image. |
+| **Why** | Each input is swapped for a typical value to see how much it pushed the plan, plus a per-day map of which candles drove the CNN. |
+
+![TradePlan by year](docs/img/tradeplan_by_year.png)
+
+| Rule, 2018 → 2026 out of sample (≈920k stock-days) | Win rate | Avg R after costs | Positive years |
+|---|---:|---:|---:|
+| Buy every stock | 22.9% | −0.029 | 3/9 |
+| TradePlan, NSE stock: 5 best per day | 27.0% | **+0.069** | **6/9** |
+| TradePlan, screenshot only: 5 best per day | 26.2% | +0.039 | 4/9 |
+
+**Honest read:**
+- **There is an edge, but it's small:** about +0.07 R per trade, roughly +0.4% after costs on a typical NSE500 stock.
+- **It loses in falling-market years** (2018, 2019, 2025). Size positions small.
+- **The CNN adds almost nothing on top of PatternEdge:** +0.069 R with it vs +0.068 R without. As the paper found, it mostly learns short-term reversal, which the context already captures.
+- **The CNN is what makes screenshot plans possible,** because a picture carries no market context.
+- **Other timeframes are untested:** the screenshot model is trained on daily NSE bars, so 1-minute charts are an extrapolation.
+
+![Screenshot plan](docs/img/app_screenshot_plan.png)
+
+**Paper trading:** each evening, open the Trade plan tab and take the BUY rows (the top 5) at the next open, with the stop and target shown. Exit after 10 bars if neither level is hit. Compare your results with the history table in the app.
 
 ## Results
 
@@ -70,13 +108,20 @@ export CPD_BREADTH_CSV=/path/to/NSE_ADV_DEC.csv
 streamlit run app.py
 ```
 
-Reproduce the benchmark: `scripts/run_bench.sh <method>…`, then `python -m cpd.edge build && python -m cpd.edge fit`, `python -m cpd.bench report`, and `python scripts/make_figures.py`.
+Reproduce:
+1. **Benchmark:** `scripts/run_bench.sh <method>…`, then `python -m cpd.bench report`.
+2. **PatternEdge:** `python -m cpd.edge build && python -m cpd.edge fit`.
+3. **ChartCNN:** `python -m cpd.chartcnn build && python -m cpd.chartcnn train && python -m cpd.chartcnn predict`.
+4. **TradePlan:** `python -m cpd.tradeplan fit [--no-cnn | --image]`, then `python -m cpd.tradeplan final [--image]`.
+5. **Figures:** `python scripts/make_figures.py`.
 
 ```
 app.py           UI
 cpd/rules.py     rule-based adapters      cpd/vision.py    YOLO adapters
 cpd/forecast.py  forecaster adapters      cpd/edge.py      PatternEdge
 cpd/bench.py     benchmark                cpd/evaluate.py  scoring
+cpd/chartcnn.py  chart-image CNN          cpd/tradeplan.py entry/stop/target models + backtest
+cpd/digitize.py  screenshot -> candles    cpd/plan_ui.py   Trade plan tab
 ```
 
-Market data is never committed. Upstream repos are cloned at runtime and keep their own licences.
+Market data is never committed. Upstream repos are cloned at runtime and keep their own licences. Nothing here is investment advice: it's a research tool with its track record attached.

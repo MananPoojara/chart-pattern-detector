@@ -140,8 +140,27 @@ def detections(ticker="RELIANCE", basket="nifty50"):
     save(fig, "forecast_example.png")
 
 
+def tradeplan():
+    """Average net R of the top-5 plans per day, by year, for the three TradePlan variants."""
+    fig, ax = plt.subplots(figsize=(9, 3.8))
+    variants = [("_nocnn", "Context + patterns", ORANGE), ("", "+ chart CNN (full model)", BLUE), ("_image", "Screenshot-only model", AQUA)]
+    w = 0.27
+    for i, (tag, lab, c) in enumerate(variants):
+        y = pd.read_csv(os.path.join(OUT, f"tradeplan_by_year{tag}.csv"), index_col=0).avg_R_net
+        tot = pd.read_csv(os.path.join(OUT, f"tradeplan_backtest{tag}.csv")).set_index("rule").loc["TradePlan: top 5 per day", "avg_R_net"]
+        ax.bar(y.index + (i - 1) * w, y.values, width=w - 0.03, color=c, label=f"{lab}  (all years: {tot:+.3f} R)")
+    ax.axhline(0, color=INK2, lw=0.8)
+    ax.set_ylabel("Avg R per trade, after costs")
+    ax.set_xticks(y.index)
+    ax.set_title("TradePlan: 5 best plans each day, out-of-sample 2018 → 2026 (1 R = the stop distance)", loc="left", fontsize=11)
+    ax.legend(frameon=False, fontsize=8.5, loc="upper center", ncol=3, bbox_to_anchor=(0.5, -0.1))
+    ax.grid(axis="x", visible=False)
+    save(fig, "tradeplan_by_year.png")
+
+
 if __name__ == "__main__":
     benchmark()
     deciles()
     ablation()
     detections()
+    tradeplan()
