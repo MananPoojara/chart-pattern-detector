@@ -1,4 +1,6 @@
-# chart-pattern-detector
+<h1 align="center">
+    Chart-Pattern-Detector
+</h1>
 
 Every open-source chart-pattern model in one app, tested honestly on Indian market data, plus **PatternEdge**, a model that learns *when* patterns are worth trading.
 
