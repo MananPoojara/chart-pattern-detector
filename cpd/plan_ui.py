@@ -29,10 +29,14 @@ NAMES = {
 }
 
 
-@st.cache_resource
 def _model(image=False):
     p = os.path.join(OUT, f"tradeplan_model{'_image' if image else ''}.pkl")
-    return pickle.load(open(p, "rb")) if os.path.exists(p) else None
+    return _load(p, os.path.getmtime(p)) if os.path.exists(p) else None
+
+
+@st.cache_resource
+def _load(p, mtime):  # mtime in the key: a daily refresh is picked up without restarting the app
+    return pickle.load(open(p, "rb"))
 
 
 def _cards(pl, fmt=lambda v: f"{v:,.2f}"):
