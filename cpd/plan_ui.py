@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from PIL import Image, ImageDraw
 
-from cpd import chartcnn, data, tradeplan as tp
+from cpd import chartcnn, data, lwchart, tradeplan as tp
 from cpd.bench import OUT
 
 NAMES = {
@@ -102,13 +102,8 @@ def nse_plan(ticker):
     pl = tp.plan(df, row.p_win, row.eR)
     st.subheader(f"{ticker}: plan for the next session")
     _cards(pl)
-    d = df.iloc[-120:]
-    fig = go.Figure(go.Candlestick(x=d.index, open=d.open, high=d.high, low=d.low, close=d.close, name=ticker))
-    for name, y, c in [("entry", pl["entry"], "#52514e"), ("stop", pl["stop"], "#e34948"), ("target", pl["target"], "#2a78d6")]:
-        fig.add_hline(y=y, line_color=c, line_dash="dash", annotation_text=f"{name} {y:,.2f}", annotation_position="right")
-    fig.update_layout(height=460, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=20, b=10))
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    st.plotly_chart(fig, width="stretch")
+    lwchart.show(df.iloc[-250:], levels=[("entry", pl["entry"], "#64748b"), ("stop", pl["stop"], "#dc2626"),
+                                         ("target", pl["target"], "#2563eb")], height=460)
     _why(model, row)
     _, img = chartcnn.features_for(df)
     _cnn_view(img)

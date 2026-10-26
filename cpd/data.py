@@ -1,7 +1,7 @@
 """Indian market data loader (NSE stocks + NSE indices).
 
 Data lives outside git. Point env vars at your private copies:
-  CPD_STOCK_ROOT  dir containing index.csv + daily/  (AmiBroker export)
+  CPD_STOCK_ROOT  dir containing index.csv + daily/ CSVs, or index.csv + bars.parquet (scripts/get_data.py)
   CPD_INDEX_CSV   Ticker,Date,Open,High,Low,Close,Volume  (dd-mm-yyyy)
 """
 import os
@@ -19,6 +19,12 @@ COLS = ["open", "high", "low", "close", "volume"]
 def manifest() -> pd.DataFrame:
     m = pd.read_csv(os.path.join(STOCK_ROOT, "index.csv"), usecols=["basket", "ticker", "path", "first", "last", "bars"])
     return m
+
+
+@lru_cache(None)
+def _bars():
+    p = os.path.join(STOCK_ROOT, "bars.parquet")
+    return pd.read_parquet(p).groupby("path") if os.path.exists(p) else None
 
 
 @lru_cache(None)
@@ -44,7 +50,9 @@ def load(ticker: str, basket: str | None = None) -> pd.DataFrame:
     else:
         m = manifest()
         row = m[(m.ticker == ticker) & ((m.basket == basket) if basket else True)].iloc[0]
-        d = pd.read_csv(os.path.join(STOCK_ROOT, row.path), parse_dates=["date"]).set_index("date")
+        b = _bars()
+        d = (b.get_group(row.path) if b is not None else
+             pd.read_csv(os.path.join(STOCK_ROOT, row.path), parse_dates=["date"])).set_index("date")
     d = d[COLS].astype(float).sort_index()
     d["volume"] = d["volume"].fillna(0)
     return d[~d.index.duplicated()]

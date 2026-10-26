@@ -7,7 +7,6 @@ import tempfile
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from cpd import data
@@ -72,21 +71,10 @@ with st.sidebar:
             df = df[data.COLS].astype(float)
             ticker = f.name
     bars = st.slider("Bars to show", 60, 1000, 250, 10)
+    days = st.slider("Buy signal window (last N bars)", 3, 30, 10)
 
 
-def candles(d):
-    fig = go.Figure(go.Candlestick(x=d.index, open=d.open, high=d.high, low=d.low, close=d.close, name="price"))
-    fig.update_layout(height=560, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
-    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    return fig
-
-
-def mark_events(fig, d, ev):
-    for dr, g in ev.groupby("dir"):
-        y = np.where(dr > 0, d.low.reindex(g.date) * 0.985, d.high.reindex(g.date) * 1.015)
-        fig.add_scatter(x=g.date, y=y, mode="markers", name={1: "bullish", -1: "bearish", 0: "neutral"}[dr],
-                        marker=dict(symbol="triangle-up" if dr > 0 else "triangle-down" if dr < 0 else "circle",
-                                    size=10, color=DIR_COLOR[dr]), text=g.pattern, hovertemplate="%{x|%Y-%m-%d}<br>%{text}")
+NO_EVENTS = pd.DataFrame(columns=["date", "pattern", "dir"])
 
 
 @st.cache_data(show_spinner="Running detector...")
@@ -94,6 +82,37 @@ def run_rule(repo, ticker, n, _df):
     from cpd import rules
 
     return rules.DETECTORS[repo](_df, start=_df.index[-n])
+
+
+@st.cache_data(show_spinner="Running YOLO on the chart as it looked each evening...")
+def run_vision_live(repo, ticker, last, n, conf, days, _df):
+    from cpd import vision
+
+    return vision.live(repo, _df, os.path.join(tempfile.gettempdir(), f"cpd_live_{repo}.png"), days, n, conf)
+
+
+@st.cache_data
+def edge_preds(mtime):
+    pr = pd.read_pickle(os.path.join(OUT, "edge_preds_PatternEdge.pkl"))
+    pr["pct"] = pr.groupby("date").pred.rank(pct=True)
+    return pr
+
+
+def signal_panel(pt):
+    if pt is None:
+        st.info(f"No bullish signal in the last {days} bars.")
+        return []
+    st.markdown(f"**Buy signal {pt['signal'].date()}**: {pt['why'][:300]}  \n"
+                f"Paper trade with the TradePlan rules: long at the next open, stop {lwchart.SL_ATR} ATR, "
+                f"target {lwchart.TP_ATR} ATR, exit after {lwchart.H} bars.")
+    c = st.columns(5)
+    c[0].metric("Entry", f"{pt['entry']:,.2f}", str(pt["entry_date"].date()) if pt["entry_date"] is not None else "next open",
+                delta_color="off")
+    c[1].metric("Stop", f"{pt['stop']:,.2f}")
+    c[2].metric("Target", f"{pt['target']:,.2f}")
+    c[3].metric("Status", pt["status"][0], pt["status"][1], delta_color="off")
+    c[4].metric("Result so far", "-" if pt["R"] is None else f"{pt['R']:+.2f} R")
+    return [("entry", pt["entry"], "#64748b"), ("stop", pt["stop"], "#dc2626"), ("target", pt["target"], "#2563eb")]
 
 
 @st.cache_data(show_spinner="Running model...")
@@ -112,6 +131,8 @@ with tab_plan:
 
 
 with tab_run:
+    from cpd import lwchart
+
     if kind == "vision" and src == "Upload chart image":
         from cpd import vision
 
@@ -125,79 +146,80 @@ with tab_run:
             st.dataframe(pd.DataFrame(dets), width="stretch")
     elif df is None:
         st.info("Choose a symbol or upload data in the sidebar.")
-    elif kind == "rule":
-        ev = run_rule(repo, ticker, bars, df)
+    else:
         d = df.iloc[-bars:]
-        fig = candles(d)
-        mark_events(fig, d, ev)
-        if repo == "stock-pattern":  # draw the pattern's pivot points
-            for _, r in ev.iterrows():
-                pts = sorted(r["info"]["points"].values())
-                fig.add_scatter(x=[p[0] for p in pts], y=[p[1] for p in pts], mode="lines+markers",
-                                line=dict(color=DIR_COLOR[r.dir], width=1.5), name=r.pattern, showlegend=False)
-        st.plotly_chart(fig, width="stretch")
-        st.caption(f"{len(ev)} events. Marker date = the bar the pattern became known (tradable from next open).")
-        st.dataframe(ev.assign(info=ev["info"].astype(str)).sort_values("date", ascending=False), width="stretch")
-    elif kind == "lines":
-        from cpd import rules
+        ev, lines, fc, note = NO_EVENTS, [], None, ""
+        if kind == "rule":
+            ev = run_rule(repo, ticker, bars, df)
+            if repo == "stock-pattern":  # the pattern's pivot points
+                lines = [dict(points=sorted(r["info"]["points"].values()), color=DIR_COLOR[r.dir]) for _, r in ev.iterrows()]
+                lines = [ln for ln in lines if ln["points"][0][0] >= d.index[0]]
+            note = f"{len(ev)} events. Arrow = the bar the pattern became known (tradable from the next open)."
+        elif kind == "lines":
+            from cpd import rules
 
-        n = min(bars, 250)
-        with st.spinner("Fitting trendlines (O(n^3), ~10 s)..."):
-            lines = rules.trendlines(df, n)
-        d = df.iloc[-n:]
-        fig = candles(d)
-        for ln in lines:
-            x = [ln["dates"][ln["i0"]], ln["dates"][ln["i1"]]]
-            fig.add_scatter(x=x, y=[ln["m"] * ln["i0"] + ln["b"], ln["m"] * ln["i1"] + ln["b"]], mode="lines",
-                            line=dict(color="#16a34a" if ln["kind"] == "support" else "#dc2626"), name=ln["kind"])
-        st.plotly_chart(fig, width="stretch")
-    elif kind == "vision":
-        from cpd import vision
+            n = min(bars, 250)
+            with st.spinner("Fitting trendlines (O(n^3), ~10 s)..."):
+                tl = rules.trendlines(df, n)
+            lines = [dict(points=[(ln["dates"][ln["i0"]], ln["m"] * ln["i0"] + ln["b"]),
+                                  (ln["dates"][ln["i1"]], ln["m"] * ln["i1"] + ln["b"])],
+                          color=DIR_COLOR[1] if ln["kind"] == "support" else DIR_COLOR[-1]) for ln in tl]
+            note = "Support (green) / resistance (red) trendlines. Visual only: no signals."
+        elif kind == "vision":
+            from cpd import vision
 
-        n = st.slider("Bars rendered into the image", 40, 250, vision.MODELS[repo]["bars"], 10)
-        conf = st.slider("Confidence", 0.05, 0.9, vision.MODELS[repo]["conf"], 0.05)
-        p = os.path.join(tempfile.gettempdir(), f"cpd_app_{repo}.png")
-        with st.spinner("Rendering chart and running YOLO..."):
-            dets = vision.detect(repo, df, p, n, conf)
-        st.image(draw_boxes(p, dets), width="stretch")
-        st.caption("Rendered in the model's training style. Only boxes reaching the last bars (at_edge) are live signals; "
-                   "boxes in the middle describe patterns that already played out.")
-        st.dataframe(pd.DataFrame(dets).drop(columns="box", errors="ignore"), width="stretch")
-    elif kind == "forecast":
-        h = st.slider("Horizon (bars)", 5, 30, 10)
-        if repo == "TimesFM 2.5":
-            st.warning("TimesFM loads ~2 GB into RAM and takes ~15 s on CPU.")
-        if st.button("Forecast") or repo != "TimesFM 2.5":
-            q = run_forecast(repo, ticker, df, h)
-            d = df.iloc[-bars:]
-            fx = pd.bdate_range(d.index[-1] + pd.Timedelta(days=1), periods=h)
-            fig = candles(d)
-            fig.add_scatter(x=list(fx) + list(fx[::-1]), y=list(q[:, 2]) + list(q[::-1, 0]), fill="toself",
-                            fillcolor="rgba(37,99,235,0.15)", line=dict(width=0), name="q10-q90")
-            fig.add_scatter(x=fx, y=q[:, 1], mode="lines", line=dict(color="#2563eb"), name="median")
-            st.plotly_chart(fig, width="stretch")
-            chg = q[-1, 1] / d.close.iloc[-1] - 1
-            st.metric(f"Median {h}-bar change", f"{chg:+.2%}", help="Benchmark tab shows how often the sign of this is right.")
-    elif kind == "edge":
-        p = os.path.join(OUT, "edge_preds_PatternEdge.pkl")
-        if not os.path.exists(p):
-            st.info("Run `python -m cpd.edge build && python -m cpd.edge fit` first.")
-        else:
-            pr = pd.read_pickle(p)
+            n = st.slider("Bars rendered into the image", 40, 250, vision.MODELS[repo]["bars"], 10)
+            conf = st.slider("Confidence", 0.05, 0.9, vision.MODELS[repo]["conf"], 0.05)
+            ev = run_vision_live(repo, ticker, str(df.index[-1].date()), n, conf, days, df)
+            img_p = os.path.join(tempfile.gettempdir(), f"cpd_app_{repo}.png")
+            dets = vision.detect(repo, df, img_p, n, conf)
+            for b in dets:  # today's boxes as brackets under (bullish) / over (bearish) the bars they cover
+                seg = df.loc[b["start"]:b["end"]]
+                y = seg.low.min() * 0.99 if b["dir"] > 0 else seg.high.max() * 1.01
+                lines.append(dict(points=[(b["start"], y), (b["end"], y)], color=DIR_COLOR[b["dir"]]))
+            note = (f"Brackets = every box on today's chart (incl. finished patterns, seen with hindsight). "
+                    f"Arrows = boxes touching the right edge of the chart as it looked that evening, re-run for each of "
+                    f"the last {days} bars: what you could have traded.")
+        elif kind == "forecast":
+            h = st.slider("Horizon (bars)", 5, 30, 10)
+            if repo == "TimesFM 2.5":
+                st.warning("TimesFM loads ~2 GB into RAM and takes ~15 s on CPU.")
+            if st.button("Forecast") or repo != "TimesFM 2.5":
+                q = run_forecast(repo, ticker, df, h)
+                fc = (pd.bdate_range(d.index[-1] + pd.Timedelta(days=1), periods=h), q)
+                chg = q[-1, 1] / d.close.iloc[-1] - 1
+                ev = pd.DataFrame(dict(date=[d.index[-1]], dir=[int(np.sign(chg))], pattern=[f"{chg:+.1%} in {h} bars"]))
+                note = "Blue = median forecast, dashed = 10%-90% band. Benchmark tab shows how often its sign is right."
+        elif kind == "edge":
+            p = os.path.join(OUT, "edge_preds_PatternEdge.pkl")
+            if not os.path.exists(p):
+                st.info("Run `python scripts/get_data.py` (or `python -m cpd.edge build && python -m cpd.edge fit`) first.")
+                st.stop()
+            pr = edge_preds(os.path.getmtime(p))
+            mine = pr[pr.ticker.astype(str) == ticker]
+            ev = pd.concat([mine[mine.pct >= 0.95].assign(dir=1, pattern="top 5% of NSE500"),
+                            mine[mine.pct <= 0.05].assign(dir=-1, pattern="bottom 5%")])[["date", "dir", "pattern"]]
+            note = (f"Arrows = days this stock ranked in the top / bottom 5% of NSE500 by expected 10-day excess return. "
+                    f"Scores up to {pr.date.max().date()}." if len(mine) else f"{ticker} is not in the NSE500 universe.")
+        pt = lwchart.paper_trade(d, ev, days) if kind != "lines" else None
+        levels = signal_panel(pt) if kind != "lines" else []
+        lwchart.show(d, ev, lines, levels, fc)
+        st.caption(note)
+        if kind == "rule":
+            st.dataframe(ev.assign(info=ev["info"].astype(str)).sort_values("date", ascending=False), width="stretch")
+        elif kind == "vision":
+            with st.expander("Today's chart as the model sees it"):
+                st.image(draw_boxes(img_p, dets), width="stretch")
+                st.dataframe(pd.DataFrame(dets).drop(columns="box", errors="ignore"), width="stretch")
+        elif kind == "edge":
             last = pr.date.max()
             today = pr[pr.date == last].sort_values("pred", ascending=False)
             c1, c2 = st.columns(2)
+            fmt = lambda x: x[["ticker", "pred"]].assign(pred=(x.pred * 1e4).round(1)).rename(columns={"pred": "exp. 10d excess (bps)"})
             c1.subheader(f"Top long candidates ({last.date()})")
-            c1.dataframe(today.head(15)[["ticker", "pred"]].assign(pred=lambda x: (x.pred * 1e4).round(1)).rename(columns={"pred": "exp. 10d excess (bps)"}), hide_index=True)
+            c1.dataframe(fmt(today.head(15)), hide_index=True)
             c2.subheader("Top short candidates")
-            c2.dataframe(today.tail(15)[::-1][["ticker", "pred"]].assign(pred=lambda x: (x.pred * 1e4).round(1)).rename(columns={"pred": "exp. 10d excess (bps)"}), hide_index=True)
-            mine = pr[pr.ticker.astype(str) == ticker].set_index("date")
-            if len(mine):
-                st.subheader(f"{ticker}: PatternEdge score history")
-                st.caption("Expected 10-day return vs the NSE500 average, in bps. Above 0 = model prefers it to the average stock.")
-                st.line_chart((mine.pred * 1e4).iloc[-bars:].rename("score (bps)"), height=260)
-            else:
-                st.caption(f"{ticker} is not in the NSE500 training universe.")
+            c2.dataframe(fmt(today.tail(15)[::-1]), hide_index=True)
             imp = os.path.join(OUT, "edge_importance_PatternEdge.csv")
             if os.path.exists(imp):
                 st.subheader("What the model looks at (permutation importance)")

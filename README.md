@@ -8,7 +8,7 @@ Every open-source chart-pattern model in one app, tested honestly on Indian mark
 
 ## What we built
 
-1. **One app** (`streamlit run app.py`): pick a repo, pick any NSE stock or index (or upload a CSV or chart image), and see its detections or forecast.
+1. **One app** (`streamlit run app.py`): pick a repo, pick any NSE stock or index (or upload a CSV or chart image), and see its detections or forecast on a TradingView Lightweight Chart. If a model gave a buy signal in the last N bars, the chart shows a paper trade for it: entry, stop, target, and how it has done since.
 2. **One fair benchmark**: every repo is scored the same way on NSE data, 2018 → 2026. The signal is known at the close, you enter at the next open and exit 10 bars later, and the result is measured against simply holding the stock.
 3. **PatternEdge**: 300 pattern detectors plus market context, fed to gradient boosting and validated walk-forward.
 4. **ChartCNN**: a chart-image model that *predicts* instead of detecting (Jiang, Kelly & Xiu 2023), trained on NSE charts.
@@ -100,13 +100,16 @@ flowchart LR
 ```bash
 uv venv .venv --python 3.10 && source .venv/bin/activate
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install -r requirements.txt
-scripts/setup_vendor.sh                       # clones the repos above at tested commits
-
-export CPD_STOCK_ROOT=/path/to/stocks         # index.csv + daily/*.csv  (date,open,high,low,close,volume)
-export CPD_INDEX_CSV=/path/to/idx_data.csv    # Ticker,Date,Open,High,Low,Close,Volume
-export CPD_BREADTH_CSV=/path/to/NSE_ADV_DEC.csv
+scripts/setup_vendor.sh      # clones the repos above at tested commits
+python scripts/get_data.py   # NSE daily data + trained models (~70 MB), no training needed
 streamlit run app.py
 ```
+
+The [`data` release](https://github.com/MananPoojara/chart-pattern-detector/releases/tag/data) is rebuilt every trading night:
+- **Data:** NSE500 stocks, 5 NSE indices and breadth, as Parquet/CSV. New days come from NSE's official bhavcopy and index files. Splits and bonuses are back-adjusted from NSE's adjusted previous close, and symbol renames are followed by ISIN.
+- **Models:** retrained, with today's plans.
+
+To use your own data, set `CPD_STOCK_ROOT` (index.csv + `daily/*.csv` or `bars.parquet`), `CPD_INDEX_CSV` and `CPD_BREADTH_CSV`. To update it, run `python scripts/update_data.py --out <dir>`.
 
 Reproduce:
 1. **Benchmark:** `scripts/run_bench.sh <method>…`, then `python -m cpd.bench report`.
@@ -122,6 +125,8 @@ cpd/forecast.py  forecaster adapters      cpd/edge.py      PatternEdge
 cpd/bench.py     benchmark                cpd/evaluate.py  scoring
 cpd/chartcnn.py  chart-image CNN          cpd/tradeplan.py entry/stop/target models + backtest
 cpd/digitize.py  screenshot -> candles    cpd/plan_ui.py   Trade plan tab
+cpd/lwchart.py   Lightweight Charts + paper-trade levels
+scripts/update_data.py  NSE daily update   scripts/get_data.py / publish_data.py  release download / upload
 ```
 
 Market data is never committed. Upstream repos are cloned at runtime and keep their own licences. Nothing here is investment advice: it's a research tool with its track record attached.

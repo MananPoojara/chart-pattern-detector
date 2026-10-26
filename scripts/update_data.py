@@ -44,7 +44,7 @@ def bhavcopy(day):
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
         b = pd.read_csv(z.open(z.namelist()[0]))
     b = b[b.SctySrs.isin(["EQ", "BE", "BZ"])]
-    return pd.DataFrame({"ticker": b.TckrSymb, "open": b.OpnPric, "high": b.HghPric, "low": b.LwPric,
+    return pd.DataFrame({"ticker": b.TckrSymb, "isin": b.ISIN, "open": b.OpnPric, "high": b.HghPric, "low": b.LwPric,
                          "close": b.ClsPric, "prev": b.PrvsClsgPric, "volume": b.TtlTradgVol.astype(float)})
 
 
@@ -66,8 +66,9 @@ def trading_days(start, end):
 
 
 def update_stocks(native_root, decoder_dir, out, until):
-    sys.path.insert(0, str(decoder_dir))
-    from native_import import decode_valid_tail
+    if native_root:
+        sys.path.insert(0, str(decoder_dir))
+        from native_import import decode_valid_tail
 
     src_root = Path(data.STOCK_ROOT)
     man = pd.read_csv(src_root / "index.csv")
@@ -104,26 +105,43 @@ def update_stocks(native_root, decoder_dir, out, until):
         done[r.path] = old
         log.append((r.ticker, status, old.date.iloc[-1]))
     # later days from NSE bhavcopy
-    last = max(d.date.iloc[-1] for d in done.values())
-    for day in trading_days(pd.Timestamp(last) + pd.Timedelta(days=1), until):
+    prev = max(d.date.iloc[-1] for d in done.values())
+    isin = bhavcopy(pd.Timestamp(prev)).set_index("ticker")["isin"]  # ticker -> ISIN, to follow symbol renames
+    for day in trading_days(pd.Timestamp(prev) + pd.Timedelta(days=1), until):
         b = bhavcopy(day)
         if b is None:
             continue
+        renamed = b[b["isin"].isin(isin[~isin.index.isin(b.ticker)])]  # e.g. ICICIPRULI -> ICICILIFE: same ISIN
+        alias = {old: new for old, i in isin.items() for new in renamed.ticker[renamed["isin"] == i] if new != old}
+        for old, new in alias.items():
+            log.append((old, f"renamed_{day.date()}", new))
+        b = pd.concat([b, renamed.assign(ticker=renamed.ticker.map({v: k for k, v in alias.items()}))])
+        isin = b.drop_duplicates("ticker").set_index("ticker")["isin"]
         b = b.set_index("ticker")
         n = 0
         for _, r in man.drop_duplicates("path").iterrows():
             d = done[r.path]
-            if r.ticker in b.index and d.date.iloc[-1] < day.strftime("%Y-%m-%d"):
+            if d.date.iloc[-1] != prev:  # stale series (renamed/suspended): appending would glue across a gap
+                continue
+            if r.ticker in b.index:
                 q = b.loc[r.ticker]
                 if isinstance(q, pd.DataFrame):
                     q = q.iloc[0]
-                if abs(np.log(q.prev / d.close.iloc[-1])) > 0.02:  # our last close must equal NSE's previous close
-                    log.append((r.ticker, f"bhav_skip_{day.date()}", "prev-close mismatch (corporate action?)"))
-                    continue
+                k = q.prev / d.close.iloc[-1]  # our last close must equal NSE's previous close
+                if abs(np.log(k)) > 0.02:
+                    if not 0.02 < k < 0.98:  # not a split/bonus shape (or a reused symbol): don't guess
+                        log.append((r.ticker, f"bhav_skip_{day.date()}", f"prev-close mismatch x{k:.3f}"))
+                        continue
+                    # split/bonus ex-date: NSE's prev close is already adjusted -> back-adjust our history the same way
+                    d = d.copy()
+                    d[["open", "high", "low", "close"]] *= k
+                    d["volume"] /= k
+                    log.append((r.ticker, f"bhav_adjusted_{day.date()}", f"x{k:.4f}"))
                 row = {c: 0.0 for c in d.columns}
                 row.update(date=day.strftime("%Y-%m-%d"), open=q.open, high=q.high, low=q.low, close=q.close, volume=q.volume)
                 done[r.path] = pd.concat([d, pd.DataFrame([row])], ignore_index=True)
                 n += 1
+        prev = day.strftime("%Y-%m-%d")
         print("bhavcopy", day.date(), "rows added", n, flush=True)
     for path, d in done.items():
         p = dst / path

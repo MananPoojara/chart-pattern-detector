@@ -77,6 +77,19 @@ def detect(name, df, path, bars=None, conf=None):
     return out
 
 
+def live(name, df, path, days=10, bars=None, conf=None):
+    """Causal signals for the last `days` bars: re-render the chart ending at each day and keep boxes that touch
+    its right edge, i.e. what the model would have said that evening. A label repeated on consecutive days is
+    reported once, on its first day."""
+    rows, prev = [], set()
+    for k in range(days - 1, -1, -1):
+        w = df.iloc[: len(df) - k]
+        labs = {(d["label"], d["dir"]) for d in detect(name, w, path, bars, conf) if d["at_edge"]}
+        rows += [dict(date=w.index[-1], pattern=lab, dir=dr) for lab, dr in labs - prev]
+        prev = labs
+    return pd.DataFrame(rows, columns=["date", "pattern", "dir"])
+
+
 def draw_boxes(path, dets):
     im = Image.open(path).convert("RGB")
     dr = ImageDraw.Draw(im)
