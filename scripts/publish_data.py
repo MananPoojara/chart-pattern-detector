@@ -56,7 +56,7 @@ def pack(stage):
 def upload(stage, notes):
     gh = lambda *a: subprocess.run(["gh", *a, "-R", REPO], capture_output=True, text=True)
     if gh("release", "view", TAG).returncode:
-        r = gh("release", "create", TAG, "--title", "Data + trained models", "--notes", notes, "--latest=false")
+        r = gh("release", "create", TAG, "--title", "Data + trained models", "--notes", notes)
         assert r.returncode == 0, r.stderr
     else:
         gh("release", "edit", TAG, "--notes", notes)
