@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>@cpd/chart demo</title>
+  <style>
+    :root { --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace; color-scheme: dark; }
+    body { margin: 0; font: 13px var(--font-mono); background: #0b0e14; color: #9aa3b5; }
+    body.light { background: #fbfbfc; color: #3d4554; color-scheme: light; }
+    header { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; align-items: center; }
+    button { font: inherit; background: transparent; color: inherit; border: 1px solid #2a3142; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+    button[aria-pressed="true"] { border-color: #26b5c4; color: #26b5c4; }
+    .sep { width: 1px; height: 20px; background: #2a3142; margin: 0 4px; }
+    #note { padding: 0 12px 8px; opacity: .75; }
+    #chart { height: calc(100vh - 90px); margin: 0 12px; }
+  </style>
+</head>
+<body>
+  <header id="bar"></header>
+  <div id="note"></div>
+  <div id="chart"></div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

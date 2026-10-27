@@ -95,6 +95,34 @@ flowchart LR
 - The edge is in mid and small caps; on Nifty 50 it's noise.
 - The universe is today's NSE500, so stocks that dropped out are missing (survivorship bias).
 
+## Platform (live web app)
+
+```mermaid
+flowchart LR
+    A[Angel One ticks] --> L[live_scan.py: 5-min bars, ChartScanAI] --> R[(Redis)]
+    M[serve.py: every model, on demand] <--> R
+    R <--> B[Bun: REST + WebSocket] <--> W[React + Lightweight Charts]
+```
+
+- The models stay in Python, and Bun only relays.
+- The home page shows today's top TradePlan setups with live prices, plus a live signal feed.
+- The terminal draws each model's signals in its own style:
+  - rule detectors: arrows
+  - YOLO models: boxes
+  - forecasters: a cone
+  - PatternEdge: a score panel
+  - TradePlan: entry/stop/target zones
+- Each chart can show daily bars or live 5-minute bars.
+- The interfaces are documented in [`platform/CONTRACT.md`](platform/CONTRACT.md).
+
+```bash
+docker run -d --name cpd-redis -p 127.0.0.1:6380:6379 redis:7-alpine redis-server --maxmemory 128mb --save ""
+python -m cpd.serve                                   # model service (run 2 for more throughput)
+python scripts/live_scan.py                           # live scanner, during market hours (needs .env)
+(cd platform/chart && bun install) && (cd platform/web && bun install && bun run build)
+(cd platform/server && bun run start)                 # http://localhost:8787
+```
+
 ## Run
 
 ```bash

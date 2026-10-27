@@ -1,0 +1,173 @@
+/*
+  PatternEdge — art direction
+  ---------------------------------------------------------------------------
+  Thesis      A research desk at dusk over the harbour: deep teal-slate night, one marigold
+              accent (the colour of NSE trading-floor garlands), numbers set like instruments.
+              Honesty is the brand: the hero is today's real ranked board, not an illustration.
+  Hero asset  The live TradePlan board (real rows, real 30-day sparklines, live 5-min prices).
+  Type        Bricolage Grotesque (condensed optical display, 75 wdth) for headlines only;
+              Geist for UI/body with tabular figures; Geist Mono for chart axes (--font-mono).
+  Colour      night #0E1A1F · surface #13242A · line #24393F · text #E8EEEA · muted #93A7A8
+              marigold #F2B33D (accent, fills only on dark) · up #3DC48A · down #F06A5C.
+              Light: paper #EEF2EF, ink #12232A, accent text #8A5A00.
+  Sequence    Hero (headline + board) → live signals + what the models are → the record
+              (+0.07 R, plainly) → model catalogue → terminal CTA → disclaimer footer.
+  Motion      Home only: one composed GSAP intro (headline words rise, board rows settle),
+              word-by-word h2 reveals on scroll. Lenis is the single smooth-scroll engine,
+              wired to ScrollTrigger, home page only. prefers-reduced-motion = final state, no Lenis.
+              Terminal: no smooth scroll, no entrance motion; only state feedback.
+  Three.js    Not used: no spatial idea earns it; the data is the image.
+  Assets      No illustrations, avatars, testimonials or logos. Icons: Solar via Iconify.
+              Sparklines are data graphics from /api/board.
+*/
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1a1f;
+  --surface: #13242a;
+  --raised: #193038;
+  --line: #24393f;
+  --line-strong: #36525b;
+  --text: #e8eeea;
+  --muted: #93a7a8;
+  --accent: #f2b33d;
+  --accent-text: #f2b33d;
+  --accent-ink: #1d1400;
+  --up: #3dc48a;
+  --down: #f06a5c;
+  --danger-bg: #3a1c1a;
+  --warn-bg: #3a2f14;
+  --focus: #f2b33d;
+
+  --chart-up: var(--up);
+  --chart-down: var(--down);
+  --chart-bg: var(--bg);
+  --chart-grid: #1a2c32;
+  --chart-text: var(--muted);
+
+  --font-display: "Bricolage Grotesque", "Arial Narrow", system-ui, sans-serif;
+  --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --r-sm: 4px;
+  --r-md: 8px;
+  --gutter: clamp(16px, 3vw, 40px);
+  --ease-out: cubic-bezier(0.2, 0.7, 0.1, 1);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef2ef;
+  --surface: #ffffff;
+  --raised: #f5f8f6;
+  --line: #d3dcd8;
+  --line-strong: #aebdb8;
+  --text: #12232a;
+  --muted: #4c6066;
+  --accent: #f2b33d;
+  --accent-text: #8a5a00;
+  --accent-ink: #1d1400;
+  --up: #0c8253;
+  --down: #c3362b;
+  --danger-bg: #fbe3e0;
+  --warn-bg: #fbf0d6;
+  --focus: #8a5a00;
+  --chart-grid: #e1e8e4;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 15px/1.5 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+h1, h2, h3, p, ul, ol, dl, dd, figure { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+a { color: inherit; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip-link { position: absolute; left: 8px; top: -40px; z-index: 100; background: var(--accent); color: var(--accent-ink); padding: 6px 10px; border-radius: var(--r-sm); }
+.skip-link:focus { top: 8px; }
+
+.up { color: var(--up); }
+.down { color: var(--down); }
+.flat, .muted { color: var(--muted); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 40px; padding: 0 16px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: transparent;
+  text-decoration: none; font-weight: 500; white-space: nowrap;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.btn:hover { border-color: var(--text); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { background: #ffc552; border-color: #ffc552; }
+.btn-sm { height: 30px; padding: 0 12px; font-size: 13px; }
+.icon-btn {
+  display: inline-grid; place-items: center; width: 36px; height: 36px;
+  border-radius: 999px; border: 1px solid var(--line); background: transparent;
+}
+.icon-btn:hover { border-color: var(--line-strong); }
+
+/* Live dot */
+.live-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.live-dot::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+.live-dot[data-live="true"] { color: var(--up); }
+.live-dot[data-live="true"]::before { background: var(--up); box-shadow: 0 0 0 0 var(--up); animation: pulse 2s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--up) 60%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+
+/* Status banner */
+.banner {
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+  padding: 8px var(--gutter); font-size: 13px; text-align: center;
+  background: var(--danger-bg); border-bottom: 1px solid var(--line);
+}
+.banner[data-level="warn"] { background: var(--warn-bg); }
+
+/* Sparkline */
+.spark { display: block; overflow: visible; }
+.spark polyline { fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark .up { stroke: var(--up); }
+.spark .down { stroke: var(--down); }
+
+/* Signal feed (shared by home + terminal) */
+.feed { display: grid; }
+.feed li {
+  display: grid; grid-template-columns: 5.5rem 1fr auto; gap: 4px 12px; align-items: baseline;
+  padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px;
+}
+.feed time { color: var(--muted); font-size: 12px; }
+.feed .tk { font-weight: 600; text-decoration: none; }
+.feed .tk:hover { color: var(--accent-text); text-decoration: underline; }
+.feed .sig { grid-column: 2 / 4; color: var(--muted); }
+.feed .lvl { color: var(--muted); font-size: 12px; }
+.feed li.fresh { animation: fresh 2.4s var(--ease-out); }
+@keyframes fresh { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } }
+.empty { color: var(--muted); padding: 16px 0; font-size: 14px; }
+
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* Terminal first-paint skeleton (shown while the lazy chunk loads; terminal.css isn't loaded yet) */
+.term-skel { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.term-skel > header { height: 52px; flex: none; border-bottom: 1px solid var(--line); background: var(--surface); }
+.term-skel > div { flex: 1; display: grid; grid-template-columns: 220px 1fr 360px; }
+.term-skel > div > * { border-right: 1px solid var(--line); background: linear-gradient(90deg, transparent, var(--surface), transparent) 0 0 / 200% 100%; animation: shimmer 1.4s infinite linear; }
+@media (max-width: 1023px) { .term-skel > div { grid-template-columns: 1fr; } .term-skel > div > :not(:nth-child(2)) { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
