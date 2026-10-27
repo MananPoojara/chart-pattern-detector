@@ -18,7 +18,10 @@ UP, DOWN, NEUTRAL = "#16a34a", "#dc2626", "#64748b"
 
 
 def _t(x):
-    return pd.Timestamp(x).strftime("%Y-%m-%d")
+    """Daily bars -> 'YYYY-MM-DD'; intraday -> epoch seconds of the IST wall clock (the chart labels it as UTC, so
+    the axis shows IST times)."""
+    x = pd.Timestamp(x)
+    return x.strftime("%Y-%m-%d") if x == x.normalize() else int(x.timestamp())
 
 
 def _label(names):
@@ -64,7 +67,7 @@ const chart = LightweightCharts.createChart(el, {{
   height: {height}, autoSize: true,
   layout: {{background: {{color: dark ? '#0e1117' : '#ffffff'}}, textColor: dark ? '#cbd5e1' : '#334155'}},
   grid: {{vertLines: {{color: dark ? '#1e293b' : '#f1f5f9'}}, horzLines: {{color: dark ? '#1e293b' : '#f1f5f9'}}}},
-  timeScale: {{rightOffset: 12}}, crosshair: {{mode: 0}},
+  timeScale: {{rightOffset: 12, timeVisible: true, secondsVisible: false}}, crosshair: {{mode: 0}},
 }});
 const c = chart.addCandlestickSeries({{upColor: '{UP}', downColor: '{DOWN}', borderVisible: false,
                                       wickUpColor: '{UP}', wickDownColor: '{DOWN}'}});

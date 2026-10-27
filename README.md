@@ -109,6 +109,12 @@ The [`data` release](https://github.com/MananPoojara/chart-pattern-detector/rele
 - **Data:** NSE500 stocks, 5 NSE indices and breadth, as Parquet/CSV. New days come from NSE's official bhavcopy and index files. Splits and bonuses are back-adjusted from NSE's adjusted previous close, and symbol renames are followed by ISIN.
 - **Models:** retrained, with today's plans.
 
+**Live intraday (Angel One):** put `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_CODE`, `ANGEL_ONE_MPIN` and `ANGEL_ONE_TOTP_SECRET` in `.env`, which is gitignored. Then run `python scripts/live_scan.py`.
+- It streams ticks from SmartStream, builds 5-minute bars, and runs ChartScanAI on each finished bar.
+- New signals go to a CSV, with stop and target levels.
+- In the app, choose "Live intraday (Angel One)". The chart refreshes every minute.
+- The candle-history API throttles hard (403 "exceeding access rate" well below its documented limits), so it is called only once per symbol for context, never every bar.
+
 To use your own data, set `CPD_STOCK_ROOT` (index.csv + `daily/*.csv` or `bars.parquet`), `CPD_INDEX_CSV` and `CPD_BREADTH_CSV`. To update it, run `python scripts/update_data.py --out <dir>`.
 
 Reproduce:

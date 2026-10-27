@@ -8,3 +8,4 @@ results/
 !docs/img/*.png
 .playwright-mcp/
 data/
+.env

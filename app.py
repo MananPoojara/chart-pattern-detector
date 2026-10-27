@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from cpd import data
+from cpd.angel import INTERVALS
 from cpd.bench import OUT
 from cpd.vision import draw_boxes
 
@@ -47,19 +48,49 @@ DIR_COLOR = {1: "#16a34a", -1: "#dc2626", 0: "#64748b"}
 st.set_page_config(page_title="Chart Pattern Detector", layout="wide")
 st.title("Chart Pattern Detector")
 
+@st.cache_data(ttl=60, show_spinner="Loading candles...")
+def intraday(ticker, interval, minute):
+    """Stored official candles + today's bars from the live scanner's tick stream. Only asks the (throttled)
+    history API when the symbol has never been fetched."""
+    from cpd import angel
+
+    p = angel.STORE / interval / f"{ticker}.parquet"
+    d = pd.read_parquet(p) if p.exists() else angel.history(ticker, interval, days=30)
+    lp = angel.STORE / f"live_{interval}.parquet"
+    if lp.exists():
+        lv = pd.read_parquet(lp).query("ticker == @ticker").drop(columns="ticker")
+        d = pd.concat([d, lv[lv.index > d.index[-1]]])
+    return d
+
+
+@st.fragment(run_every="60s")
+def _auto_refresh():
+    if st.session_state.get("_live") and src.startswith("Live intraday"):
+        st.rerun(scope="app")
+
+
 with st.sidebar:
     repo = st.selectbox("Repo / model", list(REPOS))
     kind, url, how = REPOS[repo]
     if url:
         st.markdown(f"[{url.split('github.com/')[1]}]({url})")
     st.caption(how)
-    src = st.radio("Input", ["Indian market data", "Upload CSV"] + (["Upload chart image"] if kind == "vision" else []))
+    src = st.radio("Input", ["Indian market data", "Live intraday (Angel One)", "Upload CSV"] +
+                   (["Upload chart image"] if kind == "vision" else []))
     df = None
     if src == "Indian market data":
         u = data.universe()
         basket = st.selectbox("Basket", list(u), index=list(u).index("nifty50"))
         ticker = st.selectbox("Symbol", u[basket])
         df = data.load(ticker, basket)
+    elif src.startswith("Live intraday"):
+        ticker = st.selectbox("Symbol", data.universe()["nse500"], index=data.universe()["nse500"].index("RELIANCE"))
+        interval = st.selectbox("Bar", list(INTERVALS), index=2, format_func=lambda k: INTERVALS[k][0])
+        live = st.toggle("Auto-refresh every minute", value=True)
+        try:
+            df = intraday(ticker, interval, pd.Timestamp.now().floor("1min"))
+        except Exception as e:  # login / network: say so, don't crash the page
+            st.error(f"Angel One: {e}")
     elif src == "Upload CSV":
         f = st.file_uploader("CSV with date,open,high,low,close[,volume]", type="csv")
         if f:
@@ -71,7 +102,10 @@ with st.sidebar:
             df = df[data.COLS].astype(float)
             ticker = f.name
     bars = st.slider("Bars to show", 60, 1000, 250, 10)
+    key = f"{src}|{ticker}|{df.index[-1]}" if df is not None else ""  # cache key: new bar -> recompute
     days = st.slider("Buy signal window (last N bars)", 3, 30, 10)
+st.session_state["_live"] = src.startswith("Live intraday") and live
+_auto_refresh()
 
 
 NO_EVENTS = pd.DataFrame(columns=["date", "pattern", "dir"])
@@ -127,7 +161,7 @@ tab_plan, tab_run, tab_bench = st.tabs(["Trade plan", "Run a repo", "Benchmark (
 with tab_plan:
     from cpd import plan_ui
 
-    plan_ui.render(ticker if df is not None and src == "Indian market data" else "RELIANCE")
+    plan_ui.render(ticker if df is not None and src != "Upload CSV" else "RELIANCE")
 
 
 with tab_run:
@@ -148,9 +182,16 @@ with tab_run:
         st.info("Choose a symbol or upload data in the sidebar.")
     else:
         d = df.iloc[-bars:]
+        intra = src.startswith("Live intraday")
+        if intra:
+            sig = os.path.join(os.path.dirname(OUT), "intraday", f"signals_{interval}.csv")
+            if os.path.exists(sig):
+                with st.expander("Live scanner: latest ChartScanAI signals across the watchlist", expanded=False):
+                    st.dataframe(pd.read_csv(sig).tail(50)[::-1], hide_index=True, width="stretch")
+            st.caption(f"Last finished {INTERVALS[interval][0]} bar: {df.index[-1]:%d-%b %H:%M} IST")
         ev, lines, fc, note = NO_EVENTS, [], None, ""
         if kind == "rule":
-            ev = run_rule(repo, ticker, bars, df)
+            ev = run_rule(repo, key, bars, df)
             if repo == "stock-pattern":  # the pattern's pivot points
                 lines = [dict(points=sorted(r["info"]["points"].values()), color=DIR_COLOR[r.dir]) for _, r in ev.iterrows()]
                 lines = [ln for ln in lines if ln["points"][0][0] >= d.index[0]]
@@ -170,7 +211,7 @@ with tab_run:
 
             n = st.slider("Bars rendered into the image", 40, 250, vision.MODELS[repo]["bars"], 10)
             conf = st.slider("Confidence", 0.05, 0.9, vision.MODELS[repo]["conf"], 0.05)
-            ev = run_vision_live(repo, ticker, str(df.index[-1].date()), n, conf, days, df)
+            ev = run_vision_live(repo, key, "", n, conf, days, df)
             img_p = os.path.join(tempfile.gettempdir(), f"cpd_app_{repo}.png")
             dets = vision.detect(repo, df, img_p, n, conf)
             for b in dets:  # today's boxes as brackets under (bullish) / over (bearish) the bars they cover
@@ -185,11 +226,20 @@ with tab_run:
             if repo == "TimesFM 2.5":
                 st.warning("TimesFM loads ~2 GB into RAM and takes ~15 s on CPU.")
             if st.button("Forecast") or repo != "TimesFM 2.5":
-                q = run_forecast(repo, ticker, df, h)
-                fc = (pd.bdate_range(d.index[-1] + pd.Timedelta(days=1), periods=h), q)
+                q = run_forecast(repo, key, df, h)
+                if intra:
+                    stp = d.index.to_series().diff().mode()[0]
+                    fx = pd.date_range(d.index[-1] + stp, periods=h, freq=stp)
+                else:
+                    fx = pd.bdate_range(d.index[-1] + pd.Timedelta(days=1), periods=h)
+                fc = (fx, q)
                 chg = q[-1, 1] / d.close.iloc[-1] - 1
                 ev = pd.DataFrame(dict(date=[d.index[-1]], dir=[int(np.sign(chg))], pattern=[f"{chg:+.1%} in {h} bars"]))
                 note = "Blue = median forecast, dashed = 10%-90% band. Benchmark tab shows how often its sign is right."
+        elif kind == "edge" and intra:
+            st.info("PatternEdge is trained on daily bars (its inputs include 6-month returns and NSE breadth). "
+                    "An intraday version needs retraining on the intraday history the live scanner is collecting.")
+            st.stop()
         elif kind == "edge":
             p = os.path.join(OUT, "edge_preds_PatternEdge.pkl")
             if not os.path.exists(p):
