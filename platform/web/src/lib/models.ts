@@ -12,4 +12,7 @@ export function groupModels(models: Model[]) {
     .filter((g) => g.models.length);
 }
 
-export const defaultModel = (models: Model[]) => models.find((m) => m.kind === "plan") ?? models[0];
+// 1D opens on TradePlan; 5m live opens on ChartScanAI (TradePlan/PatternEdge are daily-only)
+export const defaultModel = (models: Model[], intraday = false) =>
+  (intraday ? models.find((m) => m.id === "ChartScanAI") ?? models.find((m) => m.intraday)
+            : models.find((m) => m.kind === "plan")) ?? models[0];

@@ -40,7 +40,7 @@ export default function Terminal({ ticker }: { ticker: string }) {
   const lastFinal = useRef(0); // time of the newest closed live bar for this ticker
   const staleRetries = useRef(0);
 
-  const model = models.find((m) => m.id === query.get("model")) ?? defaultModel(models);
+  const model = models.find((m) => m.id === query.get("model")) ?? defaultModel(models, interval === "FIVE_MINUTE");
   const unsupported = !!model && interval === "FIVE_MINUTE" && !model.intraday;
 
   useEffect(() => {
@@ -55,6 +55,7 @@ export default function Terminal({ ticker }: { ticker: string }) {
 
   const setUrl = (t: string, m: string | undefined, i: Interval) => {
     const q = new URLSearchParams();
+    if (i === "FIVE_MINUTE" && !models.find((x) => x.id === m)?.intraday) m = defaultModel(models, true)?.id;  // live needs an intraday model
     if (m) q.set("model", m);
     if (i === "FIVE_MINUTE") q.set("interval", "5m");
     navigate(`/t/${t}${q.size ? `?${q}` : ""}`);
