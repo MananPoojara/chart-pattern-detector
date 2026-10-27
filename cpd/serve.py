@@ -80,9 +80,12 @@ def candles(ticker, interval):
     from cpd import angel
 
     p = angel.STORE / interval / f"{ticker}.parquet"
-    if not p.exists():  # never call the throttled history API from here
-        raise ValueError(f"no stored {interval} candles for {ticker} (intraday covers the live watchlist only)")
-    d = pd.read_parquet(p)
+    if p.exists():
+        d = pd.read_parquet(p)
+    elif ticker in angel.tokens():  # outside the live watchlist: one history call (60 days = 1 request), then stored
+        d = angel.history(ticker, interval, days=60)
+    else:
+        raise ValueError(f"{ticker} has no NSE cash token for {interval} candles")
     lp = angel.STORE / f"live_{interval}.parquet"
     if lp.exists():
         lv = pd.read_parquet(lp)

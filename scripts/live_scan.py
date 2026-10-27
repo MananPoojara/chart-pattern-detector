@@ -149,7 +149,8 @@ if __name__ == "__main__":
     step = pd.Timedelta(angel.INTERVALS[a.interval][0])
     log = lambda *m: print(f"{now():%H:%M:%S}", *m, flush=True)
 
-    if a.once:
+    if a.once:  # plus every symbol someone opened on 5m (serve.py stores them), so their history keeps growing
+        syms += [p.stem for p in (angel.STORE / a.interval).glob("*.parquet") if p.stem not in syms]
         for s in syms:
             try:
                 angel.history(s, a.interval, days=a.backfill)

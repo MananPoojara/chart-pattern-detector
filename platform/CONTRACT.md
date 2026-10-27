@@ -90,8 +90,9 @@ Model style per kind (frontend renders by `kind`, not by model id):
 | `cpd:status` | hash | live_scan.py / serve.py | `scanner_heartbeat` (epoch s), `scanner_symbols`, `serve_heartbeat` |
 
 serve.py caches results per (model, ticker, interval, last bar time) so repeated views are instant.
+Intraday candles for a ticker outside the live watchlist are fetched once from Angel history (60 days, one request) and stored; the evening `--once` backfill then keeps them growing.
 Intraday candles for jobs = stored official candles (`~/.cache/chart-pattern-detector/intraday/<INTERVAL>/<T>.parquet`)
-+ today's live bars (`intraday/live_<INTERVAL>.parquet`); serve.py never calls the throttled Angel history API.
++ today's live bars (`intraday/live_<INTERVAL>.parquet`); serve.py calls the throttled Angel history API only for a ticker with no stored candles.
 
 ## HTTP (Bun, port 8787)
 
