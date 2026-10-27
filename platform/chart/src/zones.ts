@@ -1,6 +1,6 @@
 // Trade plan zones: entry->target and entry->stop shaded from the signal bar to the right edge,
 // plus a dashed vertical marker at the signal bar (paper trades).
-import type { AutoscaleInfo } from "lightweight-charts";
+import type { AutoscaleInfo, Logical } from "lightweight-charts";
 import { Prim, type Scope } from "./prim";
 import { alpha } from "./theme";
 import type { Time } from "./types";
@@ -10,7 +10,8 @@ export type ZoneData = { signal: Time; entry?: number; stop?: number; target?: n
 export class ZonesPrimitive extends Prim {
   private z: ZoneData | null = null;
   set(z: ZoneData | null) { this.z = z; this.update(); }
-  autoscaleInfo(): AutoscaleInfo | null {
+  autoscaleInfo(_from: Logical, to: Logical): AutoscaleInfo | null {
+    if (!this.z || to < this.ti.idx(this.z.signal)) return null; // zone off screen (scrolled back in history)
     const v = [this.z?.entry, this.z?.stop, this.z?.target].filter((x): x is number => x != null);
     return v.length ? { priceRange: { minValue: Math.min(...v), maxValue: Math.max(...v) } } : null;
   }

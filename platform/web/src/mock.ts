@@ -10,7 +10,7 @@ const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >
 
 const MODELS: Model[] = ([
   ["tradeplan", "TradePlan", "plan", "Ranks every stock nightly; entry, stop and target from a chart-image CNN + gradient boosting.", true],
-  ["patternedge", "PatternEdge", "edge", "Scores each day's pattern quality; marks the top and bottom 5% of days.", false],
+  ["PatternEdge (ours)", "PatternEdge (ours)", "edge", "Scores each day's pattern quality; marks the top and bottom 5% of days.", false],
   ["stock-pattern", "stock-pattern", "rule", "Pivot-based detector for head-and-shoulders, double tops, triangles.", true],
   ["candlestick", "Candlestick rules", "rule", "TA-Lib style candlestick patterns: engulfing, hammer, doji.", true],
   ["harmonic", "Harmonic patterns", "rule", "XABCD Fibonacci ratios for Gartley, Bat and Crab.", true],
@@ -75,7 +75,7 @@ function board(): Board {
 
 function run(modelId: string, ticker: string, interval: string): RunResult {
   const m = MODELS.find((x) => x.id === modelId) ?? MODELS[0];
-  const cs = candles(ticker, interval, 300);
+  const cs = candles(ticker, interval, m.kind === "edge" ? 3000 : 300); // edge: full daily history, like the contract
   const last = cs[cs.length - 1];
   const at = (i: number) => cs[Math.max(0, cs.length - i)];
   const r: RunResult = { id: `${modelId}-${ticker}`, model: m.id, kind: m.kind, ticker, interval, asof: last.time, candles: cs,
@@ -86,6 +86,7 @@ function run(modelId: string, ticker: string, interval: string): RunResult {
   if (m.kind === "vision") r.boxes = [{ start: at(60).time, end: at(30).time, top: at(45).high * 1.02, bottom: at(45).low * 0.98, label: "Head and shoulders", dir: -1, conf: 0.71, live: false },
     { start: at(18).time, end: last.time, top: last.high * 1.02, bottom: last.low * 0.97, label: "W_Bottom", dir: 1, conf: 0.64, live: true }];
   if (m.kind === "edge") r.score = cs.map((c, i) => ({ time: c.time, value: Math.sin(i / 9) * 0.5 + (rnd() - 0.5) * 0.3 }));
+  if (m.kind === "edge") Object.assign(r, edgeAnalogs(cs));
   if (m.kind === "forecast") {
     const step = interval === "1D" ? 86400 : 300;
     const t0 = typeof last.time === "number" ? last.time : Date.parse(String(last.time)) / 1000;
@@ -103,6 +104,38 @@ function run(modelId: string, ticker: string, interval: string): RunResult {
       { name: "Volume vs 50-day", share: 0.15, value: 1.7 }, { name: "Distance to 52w high", share: -0.09, value: -0.04 }, { name: "Sector breadth", share: 0.07, value: 0.58 }];
   }
   return r;
+}
+
+/** CONTRACT "PatternEdge analogs": query box, past windows, cone from their paths, stats, flags. Synthetic numbers. */
+function edgeAnalogs(cs: Candle[]): Partial<RunResult> {
+  const W = 60, H = 20, n = cs.length, last = cs[n - 1];
+  const box = (a: number, b: number) => { const w = cs.slice(a, b + 1); return { top: Math.max(...w.map((c) => c.high)), bottom: Math.min(...w.map((c) => c.low)) }; };
+  const ends = [2280, 1510, 2790, 640, 1990, 1120, 2560, 870]; // non-overlapping, all <= n - 1 - H
+  const PAT = [["Double bottom"], [], ["Ascending triangle", "Bull flag"], ["Head and shoulders"], [], ["Cup and handle"], ["Bull flag"], []];
+  const analogs = ends.map((e, k) => {
+    const fwdPath = cs.slice(e, e + H + 1).map((c) => c.close / cs[e].close - 1);
+    const fwd = fwdPath[H];
+    return { start: cs[e - W + 1].time, end: cs[e].time, sim: +(0.93 - k * 0.035).toFixed(2), ctx: +(0.35 + ((k * 37) % 55) / 100).toFixed(2),
+      fwd: +fwd.toFixed(4), mfe: +Math.max(...fwdPath).toFixed(4), mae: +Math.min(...fwdPath).toFixed(4),
+      outcome: (fwd > 0.05 ? "target" : fwd < -0.03 ? "stop" : "time") as "target" | "stop" | "time",
+      ma50Slope: +(fwd > 0 ? 0.5 + k * 0.1 : -0.2 + k * 0.05).toFixed(2),
+      results: k % 3 === 2 ? null : { q: `Q${(k % 4) + 1}`, salesYoY: +(0.04 + k * 0.02).toFixed(2), profitYoY: k === 4 ? null : +(0.12 - k * 0.03).toFixed(2) },
+      patterns: PAT[k], path: fwdPath };
+  });
+  const q = (p: number) => Array.from({ length: H + 1 }, (_, i) => { const v = analogs.map((a) => a.path[i]).sort((x, y) => x - y); return v[Math.round(p * (v.length - 1))]; });
+  const fut: string[] = []; for (let d = new Date(String(last.time) + "T00:00:00Z"); fut.length < H; ) { d.setUTCDate(d.getUTCDate() + 1); if (d.getUTCDay() % 6) fut.push(iso(d)); }
+  const ts = [String(last.time), ...fut];
+  const pts = (p: number) => q(p).map((v, i) => ({ time: ts[i], value: +(last.close * (1 + v)).toFixed(2) }));
+  const up = analogs.filter((a) => a.fwd > 0).length, med = q(0.5)[H];
+  const pc = (x: number) => `${x >= 0 ? "+" : "−"}${Math.abs(x * 100).toFixed(1)}%`;
+  return {
+    analogs: analogs.map(({ path: _p, ...a }) => a),
+    boxes: [{ start: cs[n - W].time, end: last.time, ...box(n - W, n - 1), label: `${up}/${analogs.length} analogs up · ${pc(med)} / ${H}d`, dir: med >= 0 ? 1 : -1, conf: 1, live: true },
+      ...analogs.map((a, k) => ({ start: a.start, end: a.end, ...box(ends[k] - W + 1, ends[k]), label: `${String(a.end).slice(0, 7)} · ${pc(a.fwd)}`, dir: (a.fwd >= 0 ? 1 : -1) as 1 | -1, conf: a.sim, live: false }))],
+    forecast: { median: pts(0.5), lo: pts(0.1), hi: pts(0.9) },
+    stats: { analog_n: analogs.length, analog_p_up: up / analogs.length, analog_median_fwd: +med.toFixed(4), analog_ctx_p_up: 0.62, ma50_slope_now: 0.0, ma50_slope_analogs: 0.8 },
+    flags: [`50-DMA flat now (+0.0%); in the ${up} analogs that went up it was rising (median +0.8%/10 bars)`, "NIFTY below its 50-DMA now; above it in 6 of 8 analogs"],
+  };
 }
 
 const SIGNAL_MODELS = ["yolo-chartscan", "stock-pattern", "candlestick"];

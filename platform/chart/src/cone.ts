@@ -1,5 +1,5 @@
 // Forecast: shaded lo..hi cone + median line, starting at the last candle.
-import type { AutoscaleInfo } from "lightweight-charts";
+import type { AutoscaleInfo, Logical } from "lightweight-charts";
 import { Prim, type Scope } from "./prim";
 import { alpha } from "./theme";
 import type { Forecast, Pt } from "./types";
@@ -7,8 +7,9 @@ import type { Forecast, Pt } from "./types";
 export class ConePrimitive extends Prim {
   private f: Forecast | null = null;
   set(f: Forecast | null) { this.f = f; this.update(); }
-  autoscaleInfo(): AutoscaleInfo | null {
-    if (!this.f?.lo.length) return null;
+  autoscaleInfo(_from: Logical, to: Logical): AutoscaleInfo | null {
+    // only while the cone is on screen, so scrolling back to a 2019 analog rescales to 2019 prices
+    if (!this.f?.lo.length || to < this.ti.idx(this.f.lo[0].time)) return null;
     return { priceRange: { minValue: Math.min(...this.f.lo.map((p) => p.value)), maxValue: Math.max(...this.f.hi.map((p) => p.value)) } };
   }
   private pts(s: Scope, ps: Pt[]) {

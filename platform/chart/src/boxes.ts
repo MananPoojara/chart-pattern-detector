@@ -1,4 +1,6 @@
 // YOLO-style labelled rectangles (vision kind), like ChartScanAI's own output.
+// Edge analogs reuse them: past windows dashed, no conf suffix, plus a thin bracket over the H bars that followed.
+import type { Logical } from "lightweight-charts";
 import { Prim, label, type Scope } from "./prim";
 import { alpha, dirColor } from "./theme";
 import type { Box } from "./types";
@@ -8,7 +10,11 @@ const hit = (a: R, b: R) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.
 
 export class BoxesPrimitive extends Prim {
   private boxes: Box[] = [];
-  set(boxes: Box[]) {
+  private analog = false;
+  private after = 0;
+  /** analog: edge style; after: bars covered by the bracket after each past box (0 = none) */
+  set(boxes: Box[], { analog = false, after = 0 } = {}) {
+    this.analog = analog; this.after = after;
     // live boxes last so they paint (and claim label space) on top of history
     this.boxes = [...boxes].sort((a, b) => +a.live - +b.live);
     this.update();
@@ -30,11 +36,22 @@ export class BoxesPrimitive extends Prim {
       c.strokeStyle = b.live ? col : alpha(col, 0.45);
       c.fillStyle = alpha(col, b.live ? 0.16 : 0.04);
       c.fillRect(r.x, r.y, r.w, r.h);
+      c.setLineDash(this.analog && !b.live ? [4 * hr, 3 * hr] : []);
       c.strokeRect(r.x + 0.5, r.y + 0.5, r.w, r.h);
+      c.setLineDash([]);
+      if (this.analog && !b.live && this.after > 0) {
+        // bracket ⌊__⌋ under the box's bottom edge, from its end to end + H bars: "what happened next"
+        const xe = this.chart!.timeScale().logicalToCoordinate((this.ti.idx(b.end) + this.after) as Logical);
+        if (xe == null) return;
+        const x0 = r.x + r.w + 2 * hr, x1 = Math.round(xe * hr), y = r.y + r.h, t = 4 * vr;
+        c.lineWidth = Math.max(1, Math.round(hr));
+        c.strokeStyle = alpha(col, 0.6);
+        c.beginPath(); c.moveTo(x0, y - t); c.lineTo(x0, y); c.lineTo(x1, y); c.lineTo(x1, y - t); c.stroke();
+      }
     });
     for (let i = this.boxes.length - 1; i >= 0; i--) {
       const r = geo[i], b = this.boxes[i]; if (!r) continue;
-      const text = `${b.label} ${b.conf.toFixed(2)}`;
+      const text = this.analog ? b.label : `${b.label} ${b.conf.toFixed(2)}`;
       const col = dirColor(this.pal, b.dir);
       c.font = `${11 * vr}px ${this.pal.font}`;
       const w = c.measureText(text).width + 8 * vr, h = 15 * vr;

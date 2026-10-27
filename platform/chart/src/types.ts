@@ -16,6 +16,17 @@ export type PaperTrade = {
   status: string; detail: string; R: number | null; entryTime: Time | null;
 };
 
+export type Analog = {
+  start: Time; end: Time;          // the past window (end = its "today")
+  sim: number; ctx: number;        // shape similarity / context agreement with today, 0..1
+  fwd: number;                     // return over the next H bars after `end` (fraction)
+  mfe: number; mae: number;        // best / worst move within H bars (fractions)
+  outcome: "target" | "stop" | "time";
+  ma50Slope: number;               // 50-DMA slope at `end` (% per 10 bars)
+  results?: { q: string; salesYoY: number | null; profitYoY: number | null } | null;
+  patterns: string[];
+};
+
 export type RunResult = {
   id: string; model: string; kind: Kind; ticker: string; interval: string; asof: Time;
   candles: Candle[];
@@ -25,6 +36,8 @@ export type RunResult = {
   note: string;
   stats?: Record<string, number | string>;
   drivers?: { name: string; share: number; value: number }[];
+  analogs?: Analog[];   // edge: best first, <= 10
+  flags?: string[];     // edge: plain-English context mismatches
   error?: string;
 };
 

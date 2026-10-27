@@ -13,6 +13,7 @@ import { ModelPicker } from "../components/ModelPicker";
 import { SymbolSearch } from "../components/SymbolSearch";
 import { PaperTradeCard } from "../components/PaperTradeCard";
 import { PlanDetails } from "../components/PlanDetails";
+import { AnalogsPanel } from "../components/AnalogsPanel";
 import { RunLoading } from "../components/RunLoading";
 import { SignalFeed } from "../components/SignalFeed";
 import { ThemeToggle } from "../components/ThemeToggle";
@@ -182,6 +183,12 @@ export default function Terminal({ ticker }: { ticker: string }) {
               {shownResult.note && <p className="note small"><Icon icon="solar:info-circle-linear" width={15} aria-hidden="true" /> {shownResult.note}</p>}
               <PaperTradeCard trade={shownResult.paperTrade} />
               {shownResult.kind === "plan" && <PlanDetails result={shownResult} />}
+              {shownResult.kind === "edge" && (
+                <AnalogsPanel key={currentKey} result={shownResult}
+                  // mobile: the chart lives in another tab, so switch first and act once it has a size
+                  onFocus={(a, b) => { setTab("chart"); requestAnimationFrame(() => chartRef.current?.focus(a, b)); }}
+                  onToday={() => { setTab("chart"); requestAnimationFrame(() => chartRef.current?.fit()); }} />
+              )}
             </>
           )}
 

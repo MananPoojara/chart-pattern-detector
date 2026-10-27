@@ -18,6 +18,8 @@ export interface PatternChart {
   pushBar(c: Candle): void;
   setTheme(t: ThemeName): void;
   fit(): void;
+  /** scroll + zoom the time scale to [start, end] with a little padding either side */
+  focus(start: Time, end: Time): void;
   destroy(): void;
 }
 
@@ -25,6 +27,7 @@ const MARKER_TEXT_LAST = 6; // text only on the newest markers so busy detectors
 const MARKER_TEXT_GAP = 5; // bars between texted markers on the same side
 const MARKER_TEXT_MAX = 18; // chars; long detector names are cut (full text stays in the API result)
 const clip = (s: string) => (s.length > MARKER_TEXT_MAX ? s.slice(0, MARKER_TEXT_MAX - 1) + "…" : s);
+const FIT_BARS = 150; // initial view: last ~150 bars (+ rightPad, which covers any cone); full history stays scrollable
 const lw = (t: Time) => t as LwTime;
 
 export function createPatternChart(el: HTMLElement, opts: { theme?: ThemeName } = {}): PatternChart {
@@ -105,7 +108,8 @@ export function createPatternChart(el: HTMLElement, opts: { theme?: ThemeName } 
     })));
 
     lines.set(r.lines, r.kind === "lines" ? 1.5 : 1);
-    boxes.set(r.boxes);
+    // edge analogs: bracket covers the forecast horizon H (cone length), contract default 20
+    boxes.set(r.boxes, r.kind === "edge" ? { analog: true, after: Math.max(0, (r.forecast?.median.length ?? 21) - 1) } : {});
     cone.set(r.forecast?.median.length ? r.forecast : null);
 
     // levels: plan's own levels, else the paper trade's
@@ -173,7 +177,12 @@ export function createPatternChart(el: HTMLElement, opts: { theme?: ThemeName } 
     },
     fit() {
       const n = times.length;
-      if (n) chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 120) as Logical, to: (n - 1 + rightPad) as Logical });
+      if (n) chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - FIT_BARS) as Logical, to: (n - 1 + rightPad) as Logical });
+    },
+    focus(start, end) {
+      if (!times.length) return;
+      const a = ti.idx(start), b = ti.idx(end), pad = Math.max(5, Math.round((b - a) * 0.15));
+      chart.timeScale().setVisibleLogicalRange({ from: (a - pad) as Logical, to: (b + pad) as Logical });
     },
     destroy() {
       if (dead) return;

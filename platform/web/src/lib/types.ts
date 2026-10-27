@@ -1,7 +1,7 @@
 // Shapes from platform/CONTRACT.md. The chart-facing types (Candle, RunResult, ...)
 // are owned by @cpd/chart; app-only ones live here.
 export type {
-  Time, Candle, Kind, Model, Signal, Board, BoardRow, PaperTrade, RunResult,
+  Time, Candle, Kind, Model, Signal, Board, BoardRow, PaperTrade, RunResult, Analog,
 } from "@cpd/chart";
 
 export type Interval = "1D" | "FIVE_MINUTE";
