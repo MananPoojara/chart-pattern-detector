@@ -2,17 +2,33 @@
     Chart-Pattern-Detector
 </h1>
 
-Every open-source chart-pattern model in one app, tested honestly on Indian market data, plus **TradePlan**: pick an NSE stock or upload a chart screenshot and get entry, stop, target, probability and the reasons, all backed by a real out-of-sample track record.
+Every open-source chart-pattern model in one live web app, tested honestly on Indian market data. On top of them we built:
+- **PatternEdge**, which ranks pattern signals and finds look-alike charts in each stock's own history;
+- **TradePlan**, which gives entry, stop, target and a probability for any NSE stock.
 
-![Trade plan](docs/img/app_tradeplan.png)
+Every number comes with an out-of-sample track record.
+
+![Home: today's board](docs/img/app_home.png)
 
 ## What we built
 
-1. **One app** (`streamlit run app.py`): pick a repo, pick any NSE stock or index (or upload a CSV or chart image), and see its detections or forecast on a TradingView Lightweight Chart. If a model gave a buy signal in the last N bars, the chart shows a paper trade for it: entry, stop, target, and how it has done since.
-2. **One fair benchmark**: every repo is scored the same way on NSE data, 2018 → 2026. The signal is known at the close, you enter at the next open and exit 10 bars later, and the result is measured against simply holding the stock.
-3. **PatternEdge**: 300 pattern detectors plus market context, fed to gradient boosting and validated walk-forward.
+1. **A live web app**: React with TradingView Lightweight Charts, a Bun WebSocket server, Redis, and the Python models.
+   - Pick any NSE stock and any of the 14 models, and see its signals drawn in that model's own style.
+   - The home page shows today's top TradePlan setups at live prices.
+   - Charts can show daily bars or **live 5-minute bars** streamed from Angel One.
+2. **One fair benchmark**: every repo is scored the same way on NSE data, 2018 → 2026.
+   - The signal is known at the close; you enter at the next open and exit 10 bars later.
+   - Each result is measured against simply holding the stock.
+3. **PatternEdge**:
+   - 300 pattern detectors plus market context, fed to gradient boosting and validated walk-forward.
+   - **Analogs**: "this stock drew this shape before; what happened next, and is today's context the same?" Includes the 50-DMA slope, NIFTY trend, volume, and quarterly results as known on that date.
 4. **ChartCNN**: a chart-image model that *predicts* instead of detecting (Jiang, Kelly & Xiu 2023), trained on NSE charts.
-5. **TradePlan**: PatternEdge + ChartCNN turned into a trade plan, for an NSE stock or for any chart screenshot.
+5. **TradePlan**: PatternEdge plus ChartCNN turned into a trade plan, for an NSE stock or for any chart screenshot.
+6. **Data you can trust and download**, rebuilt every night:
+   - NSE daily bars from the official bhavcopy, with splits and bonuses adjusted.
+   - NSE quarterly results with their announcement time, so the model never sees a result before it was public.
+   - Trained models.
+   - All of it as a GitHub release, so nothing needs training.
 
 ```mermaid
 flowchart LR
@@ -95,53 +111,112 @@ flowchart LR
 - The edge is in mid and small caps; on Nifty 50 it's noise.
 - The universe is today's NSE500, so stocks that dropped out are missing (survivorship bias).
 
+### PatternEdge analogs: does a stock repeat its own patterns?
+
+![Analogs](docs/img/app_analogs.png)
+
+For the last 60 bars of a stock, PatternEdge finds the 10 most similar past windows in that stock's own history, back to 1996 where data exists.
+- **Similarity:** correlation of the normalised price shape.
+- **Spacing:** matches are kept far enough apart that their outcomes don't overlap.
+- **No peeking:** each match ends at least 20 bars before the day being scored, so its outcome was already known.
+
+Each match is labelled with what happened in the next 20 bars, and with how its context compares to today:
+- 50- and 200-DMA slope;
+- NIFTY trend;
+- volume;
+- named patterns;
+- quarterly sales and profit growth, as announced on NSE before that day.
+
+**Flags:** when today's context differs from the analogs that worked, the app says so in plain English. For example: "50-DMA flat now; in the 7 analogs that went up it was rising", or "volume spike without results support: operator-style risk".
+
+Every query is also compared against 1,000 sets of random windows from the same stock. If the look-alikes are no better than random, the app says so.
+
+Clicking an analog jumps the chart to it:
+
+![Analog 2018](docs/img/app_analog_focus.png)
+
+**Walk-forward test**, NSE500, every day 2018–2026, against the 20-day return over NIFTY:
+- "Rank IC" is the daily correlation between predicted and actual ranks across stocks.
+- t-statistics use non-overlapping samples.
+- The full table, including other window lengths and peer analogs, is in `analog_eval.csv` in the release.
+
+| Signal | Rank IC | t |
+|---|---|---|
+| Share of analogs that rose (vs NIFTY) | 0.0107 | 2.5 |
+| Same, weighted by context agreement | 0.0108 | 2.6 |
+| Random past windows (control) | 0.0066 | 1.9 |
+| Analogs whose 50-DMA slope **agrees** with today | 0.0097 | 2.3 |
+| Analogs whose 50-DMA slope **disagrees** | 0.0021 | 0.9 |
+| PatternEdge (gradient boosting) | 0.0638 | 8.1 |
+| PatternEdge + analog features | 0.0628 | 8.3 |
+
+**What this says:**
+- Shape matching carries real information beyond random windows, and the user's moving-average intuition holds: analogs whose 50-DMA was sloping the same way as today predict; those that disagree don't.
+- But the effect is small: about a sixth of PatternEdge's IC.
+- Adding analog features to PatternEdge doesn't improve it out of sample. So the live ranking stays as it was, and analogs are shown as evidence and as a context check, not as the score.
+
 ## Platform (live web app)
 
 ```mermaid
 flowchart LR
     A[Angel One ticks] --> L[live_scan.py: 5-min bars, ChartScanAI] --> R[(Redis)]
+    N[NSE bhavcopy + results, nightly] --> M
     M[serve.py: every model, on demand] <--> R
     R <--> B[Bun: REST + WebSocket] <--> W[React + Lightweight Charts]
 ```
 
-- The models stay in Python, and Bun only relays.
-- The home page shows today's top TradePlan setups with live prices, plus a live signal feed.
-- The terminal draws each model's signals in its own style:
+- The models stay in Python; Bun only relays.
+- Each model draws its signals in its own style:
   - rule detectors: arrows
   - YOLO models: boxes
   - forecasters: a cone
-  - PatternEdge: a score panel
+  - PatternEdge: analog boxes, a cone and a score panel
   - TradePlan: entry/stop/target zones
-- Each chart can show daily bars or live 5-minute bars.
+- **Daily or live 5-minute bars** for any NSE stock.
+  - The 68-stock watchlist (Nifty 50 plus today's board) streams live ticks.
+  - Any other stock fetches 60 days of 5-minute history the first time it's opened.
+  - An evening job keeps every opened stock's history growing.
 - The interfaces are documented in [`platform/CONTRACT.md`](platform/CONTRACT.md).
 
-```bash
-docker run -d --name cpd-redis -p 127.0.0.1:6380:6379 redis:7-alpine redis-server --maxmemory 128mb --save ""
-python -m cpd.serve                                   # model service (run 2 for more throughput)
-python scripts/live_scan.py                           # live scanner, during market hours (needs .env)
-(cd platform/chart && bun install) && (cd platform/web && bun install && bun run build)
-(cd platform/server && bun run start)                 # http://localhost:8787
-```
+![Live 5-minute ChartScanAI](docs/img/app_live5m.png)
 
 ## Run
 
+You need Python 3.10, [Bun](https://bun.sh) and Docker (for Redis). No training is needed: the release has the data and models.
+
 ```bash
+git clone https://github.com/MananPoojara/chart-pattern-detector && cd chart-pattern-detector
 uv venv .venv --python 3.10 && source .venv/bin/activate
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install -r requirements.txt
 scripts/setup_vendor.sh      # clones the repos above at tested commits
-python scripts/get_data.py   # NSE daily data + trained models (~70 MB), no training needed
-streamlit run app.py
+python scripts/get_data.py   # NSE daily data, quarterly results, trained models
 ```
 
-The [`data` release](https://github.com/MananPoojara/chart-pattern-detector/releases/tag/data) is rebuilt every trading night:
-- **Data:** NSE500 stocks, 5 NSE indices and breadth, as Parquet/CSV. New days come from NSE's official bhavcopy and index files. Splits and bonuses are back-adjusted from NSE's adjusted previous close, and symbol renames are followed by ISIN.
-- **Models:** retrained, with today's plans.
+Then start the web app, one command per terminal:
+```bash
+docker run -d --name cpd-redis -p 127.0.0.1:6380:6379 redis:7-alpine redis-server --maxmemory 128mb --save ""
+python -m cpd.serve                                   # model service; start 2 for more throughput
+(cd platform/chart && bun install) && (cd platform/web && bun install && bun run build)
+(cd platform/server && bun run start)                 # open http://localhost:8787
+```
 
-**Live intraday (Angel One):** put `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_CODE`, `ANGEL_ONE_MPIN` and `ANGEL_ONE_TOTP_SECRET` in `.env`, which is gitignored. Then run `python scripts/live_scan.py`.
-- It streams ticks from SmartStream, builds 5-minute bars, and runs ChartScanAI on each finished bar.
-- New signals go to a CSV, with stop and target levels.
-- In the app, choose "Live intraday (Angel One)". The chart refreshes every minute.
-- The candle-history API throttles hard (403 "exceeding access rate" well below its documented limits), so it is called only once per symbol for context, never every bar.
+The older single-page Streamlit app still works: `streamlit run app.py`.
+
+The [`data` release](https://github.com/MananPoojara/chart-pattern-detector/releases/tag/data) is rebuilt every trading night:
+- **Daily data:** NSE500 stocks, 5 NSE indices and breadth, as Parquet/CSV.
+  - New days come from NSE's official bhavcopy and index files.
+  - Splits and bonuses are back-adjusted from NSE's adjusted previous close.
+  - Symbol renames are followed by ISIN.
+- **Quarterly results** (`fundamentals/quarterly.parquet`): sales, net profit and EPS for NSE500 from 2014.
+  - Taken from NSE filings: the XBRL files, plus NSE's results pages before 2018.
+  - Each result is timestamped at its first public NSE announcement, so features use only what was known on each day.
+  - Spot-checked against company releases (RELIANCE, TCS, HDFCBANK, SBIN, GRANULES): the XBRL era matches exactly.
+  - Known gaps: some 2018–19 quarters that NSE itself doesn't carry, and insurers before mid-2024.
+- **Models:** retrained nightly, with today's plans.
+
+**Live intraday (Angel One):** put `ANGEL_ONE_API_KEY`, `ANGEL_ONE_CLIENT_CODE`, `ANGEL_ONE_MPIN` and `ANGEL_ONE_TOTP_SECRET` in `.env`, which is gitignored. Then run `python scripts/live_scan.py` during market hours.
+- It streams ticks from SmartStream, builds 5-minute bars, runs ChartScanAI on each finished bar, and publishes bars and signals to the app over Redis.
+- The candle-history API throttles hard (403 "exceeding access rate" well below its documented limits), so history is fetched once per stock and then grown from the live ticks.
 
 To use your own data, set `CPD_STOCK_ROOT` (index.csv + `daily/*.csv` or `bars.parquet`), `CPD_INDEX_CSV` and `CPD_BREADTH_CSV`. To update it, run `python scripts/update_data.py --out <dir>`.
 
@@ -150,7 +225,8 @@ Reproduce:
 2. **PatternEdge:** `python -m cpd.edge build && python -m cpd.edge fit`.
 3. **ChartCNN:** `python -m cpd.chartcnn build && python -m cpd.chartcnn train && python -m cpd.chartcnn predict`.
 4. **TradePlan:** `python -m cpd.tradeplan fit [--no-cnn | --image]`, then `python -m cpd.tradeplan final [--image]`.
-5. **Figures:** `python scripts/make_figures.py`.
+5. **Analogs:** `python -m cpd.analog build && python -m cpd.analog eval`. Quarterly results: `python scripts/fetch_results.py --backfill`.
+6. **Figures:** `python scripts/make_figures.py`.
 
 ```
 app.py           UI
@@ -160,6 +236,10 @@ cpd/bench.py     benchmark                cpd/evaluate.py  scoring
 cpd/chartcnn.py  chart-image CNN          cpd/tradeplan.py entry/stop/target models + backtest
 cpd/digitize.py  screenshot -> candles    cpd/plan_ui.py   Trade plan tab
 cpd/lwchart.py   Lightweight Charts + paper-trade levels
+cpd/analog.py    own-history analogs     cpd/results.py   point-in-time quarterly results
+cpd/serve.py     model service (Redis)   cpd/angel.py     Angel One login, ticks, 5-min history
+platform/        Bun server, React web app, chart package, CONTRACT.md
+scripts/live_scan.py  live 5-min scanner   scripts/fetch_results.py  NSE quarterly results
 scripts/update_data.py  NSE daily update   scripts/get_data.py / publish_data.py  release download / upload
 ```
 

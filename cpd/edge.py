@@ -152,11 +152,27 @@ def pattern_features(panel, ev, y, train_rows, shrink=200):
     return out.sort_index().astype(np.float32), pd.Series(prior, index=ev["names"])
 
 
-def fit(use_patterns=True, use_context=True, first_year=2018):
+ANALOG_COLS = ["analog_p_up", "analog_fwd", "analog_ctx_p_up", "analog_ctx_fwd", "analog_sim_mean", "analog_n",
+               "ma50_slope", "ma200_slope"]
+
+
+def fit(use_patterns=True, use_context=True, first_year=2018, analog=False):
+    """analog=True: same model + cpd.analog features (results/analog_panel.pkl); predictions go to a *_candidate file,
+    `python -m cpd.analog eval` decides whether they beat PatternEdge out of sample."""
     from sklearn.ensemble import HistGradientBoostingRegressor
     from sklearn.inspection import permutation_importance
 
     panel, ev = pd.read_pickle(CACHE)
+    extra = []
+    if analog:
+        from cpd.analog import PANEL
+        a = pd.read_pickle(PANEL)
+        extra = ANALOG_COLS + [c for c in ("salesYoY", "profitYoY", "days_since") if c in a and a[c].notna().mean() > 0.2]
+        key = panel[["ticker", "date"]].astype({"ticker": str})
+        a = key.merge(a.astype({"ticker": str})[["ticker", "date"] + extra], on=["ticker", "date"], how="left")
+        for c in extra:
+            panel[c] = a[c].values.astype("float32")
+        del a, key
     dates = panel.date.values
     # target: 10-bar forward return minus that day's cross-sectional mean, winsorized
     y = (panel.fwd - panel.groupby("date").fwd.transform("mean")).values.astype(np.float32)
@@ -164,7 +180,8 @@ def fit(use_patterns=True, use_context=True, first_year=2018):
     y = np.clip(y, lo, hi)
     ud = np.sort(panel.date.unique())
     tag = "PatternEdge" if use_patterns and use_context else "ContextOnly" if use_context else "PatternsOnly"
-    cols = (CTX_COLS if use_context else []) + (["active_bull", "active_bear"] if use_patterns else [])
+    tag += "Analog" if analog else ""
+    cols = (CTX_COLS if use_context else []) + (["active_bull", "active_bear"] if use_patterns else []) + extra
     preds, imps = [], []
     for Y in range(first_year, pd.Timestamp(ud[-1]).year + 1):
         t0 = np.datetime64(f"{Y}-01-01")
@@ -187,6 +204,10 @@ def fit(use_patterns=True, use_context=True, first_year=2018):
         print(tag, Y, "train", int(train.sum()), "test", int(test.sum()),
               "rankIC", round(pd.Series(p).corr(pd.Series(y[test]), method="spearman"), 4), flush=True)
     pr = pd.concat(preds, ignore_index=True)
+    if analog:
+        pr.to_pickle(os.path.join(OUT, f"edge_preds_{tag}_candidate.pkl"))
+        pd.concat(imps, axis=1).mean(1).sort_values(ascending=False).to_csv(os.path.join(OUT, f"edge_importance_{tag}.csv"))
+        return pr
     pr.to_pickle(os.path.join(OUT, f"edge_preds_{tag}.pkl"))
     pd.concat(imps, axis=1).mean(1).sort_values(ascending=False).to_csv(os.path.join(OUT, f"edge_importance_{tag}.csv"))
     if use_patterns and use_context:
@@ -211,5 +232,6 @@ if __name__ == "__main__":
     ap.add_argument("cmd", choices=["build", "fit"])
     ap.add_argument("--no-patterns", action="store_true", help="ablation: context features only")
     ap.add_argument("--no-context", action="store_true", help="ablation: pattern features only")
+    ap.add_argument("--analog", action="store_true", help="add cpd.analog features (candidate preds, see cpd.analog eval)")
     a = ap.parse_args()
-    build() if a.cmd == "build" else fit(use_patterns=not a.no_patterns, use_context=not a.no_context)
+    build() if a.cmd == "build" else fit(use_patterns=not a.no_patterns, use_context=not a.no_context, analog=a.analog)

@@ -15,7 +15,10 @@ from functools import lru_cache
 import numpy as np
 import pandas as pd
 
-PATH = os.path.expanduser("~/.cache/chart-pattern-detector/fundamentals/quarterly.parquet")
+_REPO_COPY = os.path.join(os.path.dirname(__file__), "..", "data", "fundamentals", "quarterly.parquet")  # get_data.py
+PATH = os.environ.get("CPD_FUNDAMENTALS") or (
+    _REPO_COPY if os.path.exists(_REPO_COPY) and not os.path.exists(os.path.expanduser("~/.cache/chart-pattern-detector/fundamentals"))
+    else os.path.expanduser("~/.cache/chart-pattern-detector/fundamentals/quarterly.parquet"))
 COLS = ["q", "salesYoY", "profitYoY", "eps_sue", "days_since"]
 
 

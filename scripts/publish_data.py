@@ -3,7 +3,8 @@ and upload them to the `data` GitHub release (overwrites the previous upload).
 
   python scripts/publish_data.py [--no-upload]
 
-data.tar   : stocks/index.csv + stocks/bars.parquet (NSE500, daily OHLCV), idx_data.csv, NSE_ADV_DEC.csv
+data.tar   : stocks/index.csv + stocks/bars.parquet (NSE500, daily OHLCV), idx_data.csv, NSE_ADV_DEC.csv,
+             fundamentals/quarterly.parquet (NSE quarterly results, point-in-time)
 models.tar : trained TradePlan / ChartCNN / PatternEdge outputs the app reads, plus the benchmark tables
 """
 import argparse
@@ -25,7 +26,7 @@ REPO = "MananPoojara/chart-pattern-detector"
 TAG = "data"
 MODEL_FILES = ["tradeplan_model.pkl", "tradeplan_model_image.pkl", "tradeplan_today.pkl", "cnn_i20.pt", "cnn_pca.pkl",
                "edge_preds_PatternEdge.pkl", "edge_importance_PatternEdge.csv", "summary.csv", "per_pattern.csv",
-               "tradeplan_backtest.csv", "tradeplan_backtest_image.csv", "tradeplan_by_year.csv"]
+               "tradeplan_backtest.csv", "tradeplan_backtest_image.csv", "tradeplan_by_year.csv", "analog_eval.csv"]
 
 
 def _add_bytes(tar, name, b):
@@ -46,6 +47,9 @@ def pack(stage):
         _add_bytes(t, "stocks/bars.parquet", pq.getvalue())
         t.add(data.INDEX_CSV, "idx_data.csv")
         t.add(os.environ.get("CPD_BREADTH_CSV", "data/NSE_ADV_DEC.csv"), "NSE_ADV_DEC.csv")
+        from cpd import results  # NSE quarterly results with announcement dates (PatternEdge analog context)
+        if os.path.exists(results.PATH):
+            t.add(results.PATH, "fundamentals/quarterly.parquet")
     with tarfile.open(stage / "models.tar", "w") as t:
         for f in MODEL_FILES:
             t.add(os.path.join(OUT, f), f)
