@@ -112,3 +112,39 @@ Intraday candles for jobs = stored official candles (`~/.cache/chart-pattern-det
 - topics: `bar:<interval>:<TICKER>`, `bars:<interval>` (all tickers, used by the board), `signals`, `board`
 - server → client: `{"topic": string, "data": any}`; on `sub` to `bar:<interval>:<T>` the server first sends the cached `cpd:last` bar.
 - Server pings every 30 s; client reconnects with backoff and re-subscribes.
+
+## PatternEdge analogs (kind `edge`, daily only)
+
+"This stock drew this shape before: what happened next, and is today's context the same?" `cpd/analog.py`.
+
+- Query = the stock's last `W` daily bars (z-normalised log close; default W=60). Matches = the most similar past
+  windows of the **same stock** (plus, if it helps out of sample, NSE500 peers), non-overlapping, each ending at least
+  `H` bars before today so its outcome is known (H=20). No lookahead anywhere: context and results are as-of the window end.
+- Context compared between today and each match: 50-DMA slope (the "MA slightly up vs flat" check), 200-DMA slope,
+  close vs 50/200-DMA, NIFTY trend, volume trend, named patterns in the window (stock-pattern / HarmonicPattern /
+  ta_patterns), latest quarterly results as known on that date (sales / profit YoY, days since announcement).
+- Prediction = similarity × context-weighted outcomes of the matches.
+
+RunResult additions for `PatternEdge (ours)` on 1D (existing `score` histogram stays):
+
+```ts
+type Analog = {
+  start: Time; end: Time;          // the past window (end = its "today")
+  sim: number;                     // shape similarity 0..1
+  ctx: number;                     // context agreement with today 0..1
+  fwd: number;                     // return over the next H bars after `end` (fraction, e.g. 0.062)
+  mfe: number; mae: number;        // best / worst move within H bars (fractions)
+  outcome: "target" | "stop" | "time";   // TradePlan rules from `end`: +2.5 ATR / -1.5 ATR / H bars
+  ma50Slope: number;               // 50-DMA slope at `end` (% per 10 bars)
+  results?: { q: string; salesYoY: number | null; profitYoY: number | null } | null;
+  patterns: string[];              // named patterns inside the window
+};
+// RunResult (edge): candles = full daily history (so 2019 analogs can be scrolled to), plus
+//   analogs: Analog[]  (best first, <= 10)
+//   boxes: today's query window (live: true, label e.g. "7/10 analogs up · +4.1% / 20d")
+//          + every analog window (live: false, label "2019-03 · +6.2%", dir = sign(fwd))
+//   forecast: median / 10% / 90% of the analogs' paths, rescaled to today's close, H bars ahead
+//   stats: { analog_n, analog_p_up, analog_median_fwd, analog_ctx_p_up, ma50_slope_now, ma50_slope_analogs, ... }
+//   flags: string[]   // plain-English context mismatches, e.g. "50-DMA flat now (+0.0%); in the 6 analogs that
+//                     //  went up it was rising (median +0.8%/10 bars)"
+```
