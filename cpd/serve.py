@@ -115,6 +115,18 @@ def _edge(mtime):
     return pr
 
 
+@lru_cache(1)
+def _market_at(m):
+    from cpd import edge
+
+    return edge.market()
+
+
+def _market():
+    _fresh()
+    return _market_at(_fresh.m)
+
+
 def _today():
     t = _res("tradeplan_today.pkl").copy()
     t["ticker"] = t.ticker.astype(str)
@@ -202,19 +214,41 @@ def build(model, ticker, interval, bars, days, df):
         r["stats"] = dict(horizon=h, median_change=chg)
         r["note"] = f"Line = median forecast of the close for the next {h} bars; shaded band = 10%-90% range."
     elif kind == "edge":
+        from cpd import analog
+
+        r["candles"] = [dict(time=tf(i), open=o, high=h, low=lo, close=c, volume=v)  # full history: analogs reach 2002
+                        for i, o, h, lo, c, v in zip(df.index, df.open, df.high, df.low, df.close, df.volume)]
+        al, s = analog.find(df, mkt=_market(), results=ticker)
+        H = s["H"]
+        r["analogs"], r["flags"] = al, s.pop("flags", [])
+        fc = s.pop("forecast", None)
+        r["stats"] = {k: v for k, v in s.items() if not isinstance(v, (dict, list))}
+        r["stats"].update({f"pctile_{k}": v for k, v in (s.get("analog_pctile") or {}).items()})
+        if al:
+            q0 = df.iloc[-s["W"]:]
+            r["boxes"].append(dict(start=tf(q0.index[0]), end=tf(q0.index[-1]), top=q0.high.max(), bottom=q0.low.min(),
+                                   label=f"{round(s['analog_p_up'] * len(al))}/{len(al)} analogs up · "
+                                         f"{s['analog_median_fwd']:+.1%} / {H}d",
+                                   dir=int(np.sign(s["analog_ctx_fwd"])), conf=s["analog_ctx_p_up"], live=True))
+            for a in al:
+                seg = df.loc[a["start"]:a["end"]]
+                r["boxes"].append(dict(start=a["start"], end=a["end"], top=seg.high.max(), bottom=seg.low.min(),
+                                       label=f"{a['end'][:7]} · {a['fwd']:+.1%}", dir=int(np.sign(a["fwd"])), conf=a["sim"], live=False))
+        if fc:
+            fx = [d.index[-1]] + list(pd.bdate_range(d.index[-1] + pd.Timedelta(days=1), periods=H))
+            r["forecast"] = {k: [dict(time=tf(x), value=v) for x, v in zip(fx, fc[k])] for k in ("lo", "median", "hi")}
         pr = _edge(os.path.getmtime(os.path.join(OUT, "edge_preds_PatternEdge.pkl")))
         mine = pr[pr.ticker == ticker]
-        if not len(mine):
-            r["error"] = f"{ticker} is not in the NSE500 PatternEdge universe."
-            return r
-        vis = mine[mine.date.between(d.index[0], d.index[-1])]
-        r["score"] = [dict(time=tf(x), value=v * 1e4) for x, v in zip(vis.date, vis.pred)]
-        ev = pd.concat([mine[mine.pct >= 0.95].assign(dir=1, pattern="top 5% of NSE500"),
-                        mine[mine.pct <= 0.05].assign(dir=-1, pattern="bottom 5%")])[["date", "dir", "pattern"]]
-        last = mine.iloc[-1]
-        r["stats"] = dict(scores_asof=str(pr.date.max().date()), score_bps=last.pred * 1e4, pct_rank=last.pct)
-        r["note"] = ("Histogram = expected 10-day excess return vs NSE500 (bps). Arrows = days this stock ranked in the "
-                     "top / bottom 5%.")
+        if len(mine):  # NSE500 cross-sectional score (histogram) as before
+            vis = mine[mine.date.between(d.index[0], d.index[-1])]
+            r["score"] = [dict(time=tf(x), value=v * 1e4) for x, v in zip(vis.date, vis.pred)]
+            ev = pd.concat([mine[mine.pct >= 0.95].assign(dir=1, pattern="top 5% of NSE500"),
+                            mine[mine.pct <= 0.05].assign(dir=-1, pattern="bottom 5%")])[["date", "dir", "pattern"]]
+            last = mine.iloc[-1]
+            r["stats"].update(scores_asof=str(pr.date.max().date()), score_bps=last.pred * 1e4, pct_rank=last.pct)
+        r["note"] = (f"Bright box = the last {s['W']} bars; dashed boxes = the most similar windows in this stock's own "
+                     f"history, labelled with what happened in the {H} bars after. Cone = those analogs' paths from "
+                     f"today's close. Histogram = expected 10-day excess return vs NSE500 (bps).")
     elif kind == "plan":
         from cpd import tradeplan as tp
         from cpd.plan_ui import NAMES
