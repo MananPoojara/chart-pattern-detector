@@ -9,3 +9,4 @@ results/
 .playwright-mcp/
 data/
 .env
+*.env.save
