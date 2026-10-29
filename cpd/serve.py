@@ -52,7 +52,7 @@ REPOS = {  # id: (kind, url, how) -- same as app.py
     "TradePlan (ours)": ("plan", "", "Chart-image CNN + pattern track records + market context -> ranked next-session "
                                     "long plans with entry / stop / target, calibrated on never-seen years."),
 }
-MODELS = [dict(id=k, name=k, kind=v[0], url=v[1], how=v[2], intraday=v[0] not in ("edge", "plan") and not k.startswith("VAE")) for k, v in REPOS.items()]
+MODELS = [dict(id=k, name=k, kind=v[0], url=v[1], how=v[2], intraday=v[0] != "plan" and not k.startswith("VAE")) for k, v in REPOS.items()]
 KEYS = {"id", "model", "kind", "ticker", "interval", "asof", "candles", "markers", "boxes", "lines", "levels", "forecast",
         "score", "paperTrade", "note"}
 IMG = os.path.join(tempfile.gettempdir(), f"cpd_serve_{os.getpid()}.png")
@@ -173,7 +173,7 @@ def build(model, ticker, interval, bars, days, df):
                       for i, o, h, lo, c, v in zip(d.index, d.open, d.high, d.low, d.close, d.volume)],
              markers=[], boxes=[], lines=[], levels=[], forecast=None, score=None, paperTrade=None, note="")
     ev = pd.DataFrame(columns=["date", "pattern", "dir"])
-    if (kind in ("edge", "plan") or model.startswith("VAE")) and not daily:  # VAE needs 256-bar windows + their futures
+    if (kind == "plan" or model.startswith("VAE")) and not daily:  # VAE needs 256-bar windows + their futures
         r["error"] = (f"{model} is trained on daily bars (6-month returns, NSE breadth, daily ranks); "
                       "pick 1D. An intraday version needs retraining on the intraday history being collected.")
         return r
@@ -228,8 +228,9 @@ def build(model, ticker, interval, bars, days, df):
 
         r["candles"] = [dict(time=tf(i), open=o, high=h, low=lo, close=c, volume=v)  # full history: analogs reach 2002
                         for i, o, h, lo, c, v in zip(df.index, df.open, df.high, df.low, df.close, df.volume)]
-        al, s = analog.find(df, mkt=_market(), results=ticker)
-        H = s["H"]
+        # intraday: NIFTY context from the previous session (today's daily close isn't known at 09:15)
+        al, s = analog.find(df, mkt=_market() if daily else _market().shift(1), results=ticker)
+        H, unit = s["H"], "d" if daily else " bars"
         r["analogs"], r["flags"] = al, s.pop("flags", [])
         fc = s.pop("forecast", None)
         r["stats"] = {k: v for k, v in s.items() if not isinstance(v, (dict, list))}
@@ -238,27 +239,33 @@ def build(model, ticker, interval, bars, days, df):
             q0 = df.iloc[-s["W"]:]
             r["boxes"].append(dict(start=tf(q0.index[0]), end=tf(q0.index[-1]), top=q0.high.max(), bottom=q0.low.min(),
                                    label=f"{round(s['analog_p_up'] * len(al))}/{len(al)} analogs up · "
-                                         f"{s['analog_median_fwd']:+.1%} / {H}d",
+                                         f"{s['analog_median_fwd']:+.1%} / {H}{unit}",
                                    dir=int(np.sign(s["analog_ctx_fwd"])), conf=s["analog_ctx_p_up"], live=True))
             for a in al:
                 seg = df.loc[a["start"]:a["end"]]
-                r["boxes"].append(dict(start=a["start"], end=a["end"], top=seg.high.max(), bottom=seg.low.min(),
-                                       label=f"{a['end'][:7]} · {a['fwd']:+.1%}", dir=int(np.sign(a["fwd"])), conf=a["sim"], live=False))
+                r["boxes"].append(dict(start=tf(a["start"]), end=tf(a["end"]), top=seg.high.max(), bottom=seg.low.min(),
+                                       label=f"{a['end'][:7] if daily else a['end'][5:]} · {a['fwd']:+.1%}", dir=int(np.sign(a["fwd"])), conf=a["sim"], live=False))
+        if not daily:  # contract time (epoch) so the panel can focus the chart on an analog
+            r["analogs"] = [dict(a, start=tf(a["start"]), end=tf(a["end"])) for a in al]
         if fc:
-            fx = [d.index[-1]] + list(pd.bdate_range(d.index[-1] + pd.Timedelta(days=1), periods=H))
+            stp = pd.Timedelta(days=1) if daily else d.index.to_series().diff().mode()[0]
+            fx = [d.index[-1]] + list(pd.bdate_range(d.index[-1] + stp, periods=H) if daily else
+                                      pd.date_range(d.index[-1] + stp, periods=H, freq=stp))
             r["forecast"] = {k: [dict(time=tf(x), value=v) for x, v in zip(fx, fc[k])] for k in ("lo", "median", "hi")}
         pr = _edge(os.path.getmtime(os.path.join(OUT, "edge_preds_PatternEdge.pkl")))
         mine = pr[pr.ticker == ticker]
-        if len(mine):  # NSE500 cross-sectional score (histogram) as before
+        if len(mine) and daily:  # NSE500 cross-sectional score (histogram) as before
             vis = mine[mine.date.between(d.index[0], d.index[-1])]
             r["score"] = [dict(time=tf(x), value=v * 1e4) for x, v in zip(vis.date, vis.pred)]
             ev = pd.concat([mine[mine.pct >= 0.95].assign(dir=1, pattern="top 5% of NSE500"),
                             mine[mine.pct <= 0.05].assign(dir=-1, pattern="bottom 5%")])[["date", "dir", "pattern"]]
+        if len(mine):  # intraday: the daily score is context only (the GBM is trained on daily bars)
             last = mine.iloc[-1]
             r["stats"].update(scores_asof=str(pr.date.max().date()), score_bps=last.pred * 1e4, pct_rank=last.pct)
         r["note"] = (f"Bright box = the last {s['W']} bars; dashed boxes = the most similar windows in this stock's own "
                      f"history, labelled with what happened in the {H} bars after. Cone = those analogs' paths from "
-                     f"today's close. Histogram = expected 10-day excess return vs NSE500 (bps).")
+                     f"the last close." + (" Histogram = expected 10-day excess return vs NSE500 (bps)." if daily else
+                                           " Daily score/rank in the panel is from the last daily close."))
     elif kind == "plan":
         from cpd import tradeplan as tp
         from cpd.plan_ui import NAMES

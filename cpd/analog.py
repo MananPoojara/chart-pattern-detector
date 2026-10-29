@@ -210,7 +210,7 @@ def _num(x):
 
 
 def _t(ts):
-    return ts.strftime("%Y-%m-%d")
+    return ts.strftime("%Y-%m-%d" if ts == ts.normalize() else "%Y-%m-%d %H:%M")  # intraday keeps the bar time
 
 
 def _summary(df, ctx, out, analogs, E, W, H, k, gap, ok, ends, n_random, seed, pats_now):
@@ -267,7 +267,8 @@ def _summary(df, ctx, out, analogs, E, W, H, k, gap, ok, ends, n_random, seed, p
                          f"{st_past} (median {fmt.format(m)})")
     # volume spike in today's window without results backing it
     vs = ctx.vol_spike.values[i - W + 1: i + 1]
-    if np.nanmax(vs, initial=0) >= SPIKE:
+    daily = df.index[-1] == df.index[-1].normalize()  # intraday volume has a time-of-day profile (15:25 always spikes)
+    if daily and np.nanmax(vs, initial=0) >= SPIKE:
         js = i - W + 1 + int(np.nanargmax(vs))
         ds, pg = ctx.days_since.values[js], ctx.profitYoY.values[js]
         backed = np.isfinite(ds) and ds <= 5 and np.isfinite(pg) and pg > 0

@@ -113,9 +113,13 @@ Intraday candles for jobs = stored official candles (`~/.cache/chart-pattern-det
 - server → client: `{"topic": string, "data": any}`; on `sub` to `bar:<interval>:<T>` the server first sends the cached `cpd:last` bar.
 - Server pings every 30 s; client reconnects with backoff and re-subscribes.
 
-## PatternEdge analogs (kind `edge`, daily only)
+## PatternEdge analogs (kind `edge`, 1D and intraday)
 
 "This stock drew this shape before: what happened next, and is today's context the same?" `cpd/analog.py`.
+
+Intraday (5m live, 15m, ...): same search over the stock's own intraday history (W=60, H=20 **bars**); analog
+`start`/`end` are epoch contract times; NIFTY context is the previous session's; no volume-spike flag (time-of-day
+volume profile). No score histogram: the GBM score is daily-trained, so `stats.score_bps`/`pct_rank` are the last daily ones.
 
 - Query = the stock's last `W` daily bars (z-normalised log close; default W=60). Matches = the most similar past
   windows of the **same stock** (plus, if it helps out of sample, NSE500 peers), non-overlapping, each ending at least

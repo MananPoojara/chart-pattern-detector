@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Icon } from "@iconify/react";
-import { dirClass, pct } from "../lib/format";
+import { dirClass, fmtTime, pct } from "../lib/format";
 import type { Analog, RunResult, Time } from "../lib/types";
 
 const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : null);
@@ -8,7 +8,8 @@ const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b), m = 
 const yoy = (v: number | null) => (v == null ? "—" : pct(v * 100, 0));
 const OUTCOME = { target: "Target", stop: "Stop", time: "Time" } as const;
 const range = (a: Analog) => {
-  const s = String(a.start).slice(0, 10), e = String(a.end).slice(0, 10);
+  const s = fmtTime(a.start), e = fmtTime(a.end);
+  if (typeof a.start === "number") return `${s} → ${e.slice(0, 10) === s.slice(0, 10) ? e.slice(11) : e.slice(5)}`;  // intraday
   return `${s} → ${e.slice(0, 4) === s.slice(0, 4) ? e.slice(5) : e}`;
 };
 
@@ -33,7 +34,7 @@ export function AnalogsPanel({ result, onFocus, onToday }: {
   const focus = (i: number) => {
     const a = analogs[i];
     // the window plus the H bars that followed it (clamped to loaded bars)
-    const at = times.findIndex((t) => String(t) >= String(a.end));
+    const at = times.findIndex((t) => (typeof t === "number" ? t >= Number(a.end) : String(t) >= String(a.end)));
     setActive(i);
     onFocus(a.start, at < 0 ? a.end : times[Math.min(times.length - 1, at + H)]);
   };
