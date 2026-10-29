@@ -162,5 +162,12 @@
 /* Yd page */
 .seg-6 { grid-template-columns: repeat(6, 1fr); }
 .yd-filter { width: 100%; margin: 0 0 8px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: transparent; color: var(--text); font: inherit; font-size: 13px; }
-.yd-strategy { padding: 12px 14px; border: 1px dashed var(--line-strong); border-radius: var(--r-sm); }
-.yd-strategy p { margin: 0 0 6px; }
+.yd-side { margin: 10px 0 0; }
+.yd-why { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
+.yd-rank { display: inline-block; min-width: 16px; margin-right: 6px; padding: 0 4px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 11px; text-align: center; }
+.yd-trades li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; padding: 4px 0; font-size: 12px; border-bottom: 1px solid var(--line); }
+.yd-trades li[data-skip="true"] { color: var(--muted); }
+.yd-rules { display: grid; gap: 4px; padding-left: 16px; list-style: disc; }
+.yd-calc { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.yd-calc label { display: grid; gap: 3px; font-size: 11px; color: var(--muted); }
+.yd-calc input { width: 100%; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: transparent; color: var(--text); font: inherit; font-size: 13px; }

@@ -80,7 +80,8 @@ Model style per kind (frontend renders by `kind`, not by model id):
 | `cpd:models` | string JSON `Model[]` | serve.py at start | |
 | `cpd:universe` | string JSON `{[basket]: string[]}` | serve.py at start | |
 | `cpd:board` | string JSON `Board` | serve.py at start + `refresh_board` job | |
-| `cpd:jobs` | list (RPUSH by bun, BLPOP by py) | bun | `{id, type: "run"|"refresh_board", model, ticker, interval, bars?, days?}` |
+| `cpd:jobs` | list (RPUSH by bun, BLPOP by py) | bun | `{id, type: "run"|"refresh_board"|"candles"|"yd_screen", model, ticker, interval, bars?, days?, profile?}` |
+| `cpd:yd:screen` | string JSON `YdScreen` | serve.py `yd_screen` job | last Yd screen (the Yd chart reads its rank from it) |
 | `cpd:result:<id>` | string JSON `RunResult`, TTL 600 s | serve.py | |
 | `cpd:done` | channel | serve.py | job id, after the result key is set |
 | `cpd:bar:<interval>` | channel | live_scan.py | `{ticker, interval, final: bool, ...Candle}`; forming bar ≤ 1 msg/s/ticker, final once at bar close |
@@ -92,7 +93,7 @@ Model style per kind (frontend renders by `kind`, not by model id):
 serve.py caches results per (model, ticker, interval, last bar time) so repeated views are instant.
 Intraday candles for a ticker outside the live watchlist are fetched once from Angel history (60 days, one request) and stored; the evening `--once` backfill then keeps them growing.
 Intraday candles for jobs = stored official candles (`~/.cache/chart-pattern-detector/intraday/<INTERVAL>/<T>.parquet`)
-+ today's live bars (`intraday/live_<INTERVAL>.parquet`); serve.py calls the throttled Angel history API only for a ticker with no stored candles.
++ today's live bars (`intraday/live_<INTERVAL>.parquet` from the main scanner, `live_yd_<INTERVAL>.parquet` from the Yd worker); serve.py calls the throttled Angel history API only for a ticker with no stored candles.
 
 ## HTTP (Bun, port 8787)
 
@@ -156,9 +157,62 @@ type Analog = {
 ## Yd page (F&O, all timeframes)
 
 - `/yd/:ticker?tf=1m|3m|5m|15m|1h|1D` (default 15m): the F&O stock list on the left (`universe.fo`: NSE stocks with stock
-  futures, from the Angel scrip master), a candle chart, and a strategy panel (strategy to be plugged in later).
-- `GET /api/candles?ticker=&interval=` -> RunResult with candles only (last 1000 bars), cached 30 s. Job
+  futures, from the Angel scrip master) or the screen, a candle chart, and the Yd strategy panel.
+- `GET /api/candles?ticker=&interval=` -> RunResult with candles (last 1000 bars) + the Yd strategy, cached 30 s. Job
   `{type: "candles", ticker, interval, profile: "yd"}`: intraday candles are fetched with the **Yd Angel One account**
   (the `#Yd` block in `.env`, its own login and rate limits) and topped up when the stored last bar is 2+ bars old.
   Intervals: `1D` (NSE daily store; Angel ONE_DAY for F&O stocks outside NSE500), `ONE_MINUTE`, `THREE_MINUTE`,
   `FIVE_MINUTE`, `FIFTEEN_MINUTE`, `ONE_HOUR`.
+
+### Yd strategy (cpd/yd.py; the user's rules, not backtested)
+
+Volume Shock + Opening-Range Breakout (A) / Pullback (B), long + short, 5-60 min holds. `VS_time(t) = CV(d,t) / mean
+CV(d-k,t)` over the 5 previous regular sessions (today excluded, all 5 required, missing slot -> that day's last earlier
+slot, partial/special sessions are never base days; n=10 and median supported in code) is the trigger; `VS_raw =
+CV(d,t) / mean V(d-k)` is logged; `VS_EOD = V(d) / mean V(d-k)` is StockEdge's "Volume Shockers". OR = bars inside
+09:15-09:30. Exits 1.5R / stop / 60 min / 15:15, stop first when both hit in one bar. `Q = min(⌊0.5% E / R⌋, ⌊80% E / O⌋)`.
+
+RunResult additions (candles job, `profile: "yd"`):
+- `markers`: entries (arrow, `"A 2.3x"` = setup + VS_time at the signal) and exits (dot, `"+1.5R target"`); skipped setups
+  are only in `trades`. `lines`: OR high/low (dir 1/-1) and session VWAP (dir 0) per visible session.
+- `paperTrade`: the newest non-skipped setup; `levels`: its entry/stop/target while pending or open.
+- `trades: YdTrade[]` (oldest first): `{date, setup, side, signal, vs_time, vs_raw, entry, stop, target, status:
+  pending|open|closed|skip, reason, entryTime, exitTime, exit?, R?, net_R?, qty?, binding?, costs? (₹), cost_R?, cost_R_slip?}`;
+  qty and costs at ₹50,000 equity.
+- `stats`: `VS_time, VS_raw, VS_EOD, VS_EOD_day, turnover20_cr, universe ("ok" or failed filters), results_day, rank,
+  screen_slot, cost_R, breakeven, breakeven_slip, cost_basis`.
+
+Timeframes: bar counts are minutes / bar length (time exit 60 min, retest window 40, chop window 30, stop order 10), so
+**1m / 3m / 5m / 15m** run both setups (5m is the spec's native frame; OR = 15 / 5 / 3 / 1 bars). **1h**: VS_time per
+hourly slot only; setups are not defined (the 09:15 bar spans past the opening range). **1D**: VS_EOD per day (dots at
+>= 2x) for next-day planning.
+
+`GET /api/yd/screen` -> `YdScreen` (job `yd_screen`, cached 60 s; the page refetches 20 s after each 5-minute close while
+the market is open): `{asof, session, slot, universe, covered, top: string[], lists: {asm, gsm, band}, rows: [{ticker,
+bar, vs_time, vs_raw, vs_eod, eod_day, close, turnover, ok, why, results, rank}]}`, rows by VS_time, `rank` 1.. among
+rows passing the filters (top 5 = tradeable). Data: stored 5m candles + `live_yd_FIVE_MINUTE.parquet`, no Angel calls.
+Filters: price ₹100-5,000; 20-day average turnover >= ₹50 cr (NSE500 daily store, 5m bars for the 5 names outside it);
+not in ASM (NSE long + short term lists) or GSM (`sec_list.csv` remarks); not within 2% of the price band (`sec_list.csv`
+band; F&O stocks have "No Band" and get NSE's 10% dynamic operating range, which NSE flexes in 5% steps intraday, so
+that check is approximate). An unreachable NSE list shows "ASM/GSM unknown" and fails the row. Results day = an NSE
+results announcement since the previous session's close (`cpd/results.py`), tagged, not excluded.
+
+Live bars: systemd user unit `cpd-yd-live` runs `~/.cache/chart-pattern-detector/yd_scan.sh` (weekdays 09:12-15:35:
+`scripts/live_scan.py --profile yd --watchlist fo --bars-only`, SmartStream on the Yd account for all F&O tokens).
+
+Sources (checked 29-Oct-2026):
+- StockEdge Volume Shockers: "today's traded volume is at least 1.5 times above their last 5 days' average traded
+  volume" — https://web.stockedge.com/trending-stocks?section=volume-shockers (threshold here: 2.0).
+- Zarattini, Barbon & Aziz, "A Profitable Day Trading Strategy for the U.S. Equity Market" (SFI 24-98,
+  https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4729284): 5-min OR; Relative Volume = first-5-min volume / 14-day
+  average of first-5-min volume; trade only RV >= 100% and the top 20 by RV; stop 10% of 14-day ATR; no target, exit at
+  the close; 1% risk per trade, 4x leverage cap.
+- Costs: STT 0.025% intraday sell, NSE transaction 0.00297%, SEBI ₹10/crore, stamp 0.003% buy, GST 18% on brokerage +
+  transaction + SEBI — https://support.rupeezy.in/support/solutions/articles/2100044912 (and
+  https://hdfcsky.com/pricing/other-trading-charges, https://www.nseindia.com/static/invest/first-time-investor-sebi-turnover-fees-stt-other-levies
+  for SEBI). Brokerage: Angel One intraday lower of ₹20 or 0.1% per order — https://www.angelone.in/exchange-transaction-charges
+  (Zerodha-style 0.03% is cheaper; the code uses Angel's). IPFT ₹10/crore is not modelled.
+- Tick size: https://nsearchives.nseindia.com/content/circulars/CMTR67133.pdf (< ₹250: 0.01, ≤ 1,000: 0.05, ≤ 5,000: 0.10 ...).
+- ASM: https://archives.nseindia.com/invest/content/Long_Term_ASM.csv, .../Short_Term_ASM.csv; GSM + price bands:
+  https://nsearchives.nseindia.com/content/equities/sec_list.csv (pages: https://www.nseindia.com/reports/asm, /reports/gsm);
+  F&O dynamic range: https://www.nseindia.com/static/trade/price-band-operating-range-flex-faqs

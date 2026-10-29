@@ -9,6 +9,8 @@ Bars and signals are also published to Redis (platform/CONTRACT.md); Redis being
 
   python scripts/live_scan.py [--interval FIVE_MINUTE] [--watchlist nifty50 | SBIN,TCS,...]
   python scripts/live_scan.py --once --backfill 730     # history only (after the close): grow the store
+  python scripts/live_scan.py --profile yd --watchlist fo --bars-only   # Yd worker: all F&O stocks, bars only
+--bars-only: no detection, no Redis, no store writes; today's bars go to intraday/live_<profile>_<INTERVAL>.parquet.
 """
 import argparse
 import os
@@ -49,7 +51,9 @@ class Bars:
             if b is None:
                 if self.done.get(sym) and start <= self.done[sym][-1]["t"]:
                     return  # late tick for a bar already closed
-                b = self.cur[sym] = dict(t=start, open=px, high=px, low=px, close=px, v0=self.cum.get(sym, cumvol))
+                # first bar of the run starts from 0: the 09:15 bar keeps the pre-open volume, like the official
+                # candles (a bar that began before we listened is dropped anyway)
+                b = self.cur[sym] = dict(t=start, open=px, high=px, low=px, close=px, v0=self.cum.get(sym, 0))
             b["high"], b["low"], b["close"] = max(b["high"], px), min(b["low"], px), px
             self.cum[sym] = cumvol
 
@@ -137,12 +141,14 @@ if __name__ == "__main__":
     ap.add_argument("--watchlist", default="nifty50", help="basket name or comma-separated NSE symbols")
     ap.add_argument("--backfill", type=int, default=60, help="days of history to fetch per symbol")
     ap.add_argument("--once", action="store_true", help="fetch history and exit (no live scan)")
+    ap.add_argument("--profile", default=None, help="Angel One profile from .env (e.g. yd); default = main account")
+    ap.add_argument("--bars-only", action="store_true", help="live bars only: no detection, Redis or store writes")
     a = ap.parse_args()
     u = data.universe()
-    syms = list(u[a.watchlist] if a.watchlist in u else a.watchlist.split(","))
+    syms = list(angel.fo_stocks()) if a.watchlist == "fo" else list(u[a.watchlist] if a.watchlist in u else a.watchlist.split(","))
     try:  # plus today's TradePlan board, so the home page's top setups get live prices
         import json
-        syms += [r["ticker"] for r in json.loads(bus.client(timeout=2).get("cpd:board") or "{}").get("rows", [])]
+        syms += [] if a.bars_only else [r["ticker"] for r in json.loads(bus.client(timeout=2).get("cpd:board") or "{}").get("rows", [])]
     except Exception as e:
         print("board watchlist skipped:", e, flush=True)
     syms = [s for s in dict.fromkeys(syms) if s in angel.tokens()]
@@ -153,7 +159,7 @@ if __name__ == "__main__":
         syms += [p.stem for p in (angel.STORE / a.interval).glob("*.parquet") if p.stem not in syms]
         for s in syms:
             try:
-                angel.history(s, a.interval, days=a.backfill)
+                angel.history(s, a.interval, days=a.backfill, profile=a.profile)
             except Exception as e:
                 log(s, e)
         log("history done")
@@ -161,9 +167,24 @@ if __name__ == "__main__":
 
     bars, stop = Bars(step), threading.Event()
     by_token = {angel.tokens()[s]: s for s in syms}
-    threading.Thread(target=angel.stream, args=(list(by_token), lambda t, ts, px, v: bars.tick(by_token[t], ts, px, v), stop),
-                     daemon=True).start()
-    log(f"streaming {len(syms)} symbols, {a.interval}")
+    threading.Thread(target=angel.stream, args=(list(by_token), lambda t, ts, px, v: bars.tick(by_token[t], ts, px, v), stop,
+                                                a.profile), daemon=True).start()
+    log(f"streaming {len(syms)} symbols, {a.interval}" + (f", profile {a.profile}" if a.profile else ""))
+    livefile = angel.STORE / (f"live_{a.profile}_{a.interval}.parquet" if a.bars_only else f"live_{a.interval}.parquet")
+    if a.bars_only:  # Yd worker: the main scanner owns Redis bars/signals and the store; the evening backfill grows it
+        while now() - now().normalize() < CLOSE + step and now().weekday() < 5:
+            bars.close_due(now() - pd.Timedelta(seconds=2))
+            live = [f.assign(ticker=s) for s in syms if (f := bars.frame(s)) is not None]
+            if live:  # write + rename: the screen never reads a half-written file
+                pd.concat(live).to_parquet(livefile.with_suffix(".part"))
+                livefile.with_suffix(".part").replace(livefile)
+                log(f"{len(live)}/{len(syms)} symbols have live bars")
+            t = now()
+            nxt = t.normalize() + OPEN + ((t - t.normalize() - OPEN) // step + 1) * step + pd.Timedelta(seconds=3)
+            time.sleep(max(5.0, (nxt - now()).total_seconds()))
+        stop.set()
+        log("market closed")
+        sys.exit()
     pub = Pub(a.interval, len(syms))
 
     def publish():  # 1 s loop: the tick callback stays cheap
@@ -180,7 +201,7 @@ if __name__ == "__main__":
         while len(ctx) < len(syms) and not stop.is_set():
             for s in [s for s in syms if s not in ctx]:
                 try:
-                    ctx[s] = angel.history(s, a.interval, days=a.backfill)
+                    ctx[s] = angel.history(s, a.interval, days=a.backfill, profile=a.profile)
                 except Exception as e:
                     log(s, "history:", e)
                     stop.wait(60)
@@ -207,7 +228,7 @@ if __name__ == "__main__":
             if prev.get(s, (None,))[0] != d.index[-1] and len(d) >= 60:
                 todo.append((s, d))
         if live:
-            pd.concat(live).to_parquet(angel.STORE / f"live_{a.interval}.parquet")
+            pd.concat(live).to_parquet(livefile)
         for s, d in todo:  # 2) then the (slower) detection
             labs = detect(d)
             new = labs - prev.get(s, (None, set()))[1]  # a pattern is reported once, on its first bar

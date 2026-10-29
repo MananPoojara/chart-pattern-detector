@@ -38,7 +38,15 @@ export type RunResult = {
   drivers?: { name: string; share: number; value: number }[];
   analogs?: Analog[];   // edge: best first, <= 10
   flags?: string[];     // edge: plain-English context mismatches
+  trades?: YdTrade[];   // Yd page: every setup of the strategy, oldest first
   error?: string;
+};
+
+export type YdTrade = {
+  date: string; setup: "A" | "B"; side: 1 | -1; signal: Time; vs_time: number; vs_raw: number | null;
+  entry: number; stop: number; target: number; status: "pending" | "open" | "closed" | "skip"; reason?: string;
+  entryTime: Time | null; exitTime: Time | null; exit?: number; R?: number; net_R?: number;
+  qty?: number; binding?: string; costs?: number; cost_R?: number; cost_R_slip?: number;
 };
 
 export type Signal = {

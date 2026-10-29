@@ -12,8 +12,9 @@
  *        Identical in-flight runs share one job; finished results cached 10 min (the Python worker is serial,
  *        so a cached view must not queue behind a slow first run); intraday entries drop when a bar for
  *        that ticker closes.
- *   GET /api/candles?ticker=&interval=   candles only, fetched with the Yd Angel One account (Yd page). Any F&O
- *        or NSE500 ticker; interval 1D | ONE_MINUTE | THREE_MINUTE | FIVE_MINUTE | FIFTEEN_MINUTE | ONE_HOUR. Cached 30 s.
+ *   GET /api/candles?ticker=&interval=   candles + the Yd strategy, fetched with the Yd Angel One account (Yd page).
+ *        Any F&O or NSE500 ticker; interval 1D | ONE_MINUTE | THREE_MINUTE | FIVE_MINUTE | FIFTEEN_MINUTE | ONE_HOUR. Cached 30 s.
+ *   GET /api/yd/screen  F&O stocks ranked by VS_time at the latest 5m bar (job yd_screen). Cached 60 s.
  *   WS  /ws             {"op":"sub"|"unsub","topics":[...]} -> {"topic","data"}
  *   GET /*              static platform/web/dist with SPA fallback
  *
@@ -160,6 +161,20 @@ async function handleCandles(q: URLSearchParams): Promise<Response> {
   return rawJson(await p);
 }
 
+let screenCache: { at: number; body: string } | null = null;
+
+async function handleScreen(): Promise<Response> {
+  if (screenCache && Date.now() - screenCache.at < 60_000) return rawJson(screenCache.body);
+  let p = inflight.get("yd-screen");
+  if (!p) {
+    p = runJob({ id: crypto.randomUUID(), type: "yd_screen" });
+    inflight.set("yd-screen", p);
+    p.then((body) => { if (!body.includes('"error"')) screenCache = { at: Date.now(), body }; }, () => {})
+      .finally(() => inflight.delete("yd-screen"));
+  }
+  return rawJson(await p);
+}
+
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of candleCache) if (now - v.at >= 30_000) candleCache.delete(k);
@@ -193,6 +208,8 @@ async function api(path: string, q: URLSearchParams): Promise<Response> {
       return handleRun(q);
     case "/api/candles":
       return handleCandles(q);
+    case "/api/yd/screen":
+      return handleScreen();
   }
   throw new HttpError(404, "not found");
 }

@@ -96,9 +96,18 @@ def candles(ticker, interval, profile=None):
         d = angel.history(ticker, interval, days=DAYS.get(interval, 60), profile=profile)
     else:
         raise ValueError(f"{ticker} has no NSE cash token for {interval} candles")
-    lp = angel.STORE / f"live_{interval}.parquet"
-    if lp.exists():
-        lv = pd.read_parquet(lp)
+    return _with_live(d, ticker, _live_frames(interval))
+
+
+def _live_frames(interval):
+    """Today's tick-built bars: live_<INTERVAL> (main watchlist scanner) + live_yd_<INTERVAL> (Yd F&O worker)."""
+    from cpd import angel
+
+    return [pd.read_parquet(p) for p in sorted(angel.STORE.glob(f"live*_{interval}.parquet"))]
+
+
+def _with_live(d, ticker, frames):
+    for lv in frames:
         lv = lv[lv.ticker.astype(str) == ticker].drop(columns="ticker")
         d = pd.concat([d, lv[lv.index > d.index[-1]]])
     d = d[data.COLS].astype(float).sort_index()
@@ -330,16 +339,207 @@ def board():
     return dict(asof=mdl["asof"], rows=rows, universe=len(today))
 
 
-def raw(job):
-    """Candles only (the Yd page; its strategy plugs in here later), fetched with the job's Angel One profile."""
+# ---------------------------------------------------------------- Yd strategy (cpd/yd.py, platform/CONTRACT.md "Yd")
+NSE = "https://nsearchives.nseindia.com/content/equities/sec_list.csv", "https://archives.nseindia.com/invest/content/{}_Term_ASM.csv"
+_lists = {}
+
+
+def _nse_lists(day):
+    """ASM (long + short term), GSM and price band % per EQ symbol from NSE's archive CSVs, once a day.
+    Unreachable -> asm/gsm None (shown as 'unknown', never as passed); not cached, so the next screen retries."""
+    if day in _lists:
+        return _lists[day]
+    import io
+
+    import requests
+
+    get = lambda u: io.StringIO(requests.get(u, headers={"User-Agent": "Mozilla/5.0"}, timeout=20).text)
+    try:
+        sec = pd.read_csv(get(NSE[0]))
+        sec = sec[sec.Series == "EQ"]
+        asm = set()
+        for k in ("Long", "Short"):
+            a = pd.read_csv(get(NSE[1].format(k))).iloc[:, 0].astype(str).str.strip()
+            asm |= set(a[a.str.match(r"^[A-Z0-9&-]+$")])
+        out = dict(asm=asm, gsm=set(sec.Symbol[sec.Remarks.astype(str).str.contains("GSM")]),
+                   band=dict(zip(sec.Symbol, pd.to_numeric(sec.Band, errors="coerce"))))
+    except Exception as e:
+        log("NSE lists:", repr(e))
+        return dict(asm=None, gsm=None, band={})
+    _lists.clear()
+    _lists[day] = out
+    return out
+
+
+@lru_cache(2)
+def _announced(_day):
+    from cpd import results
+
+    a = results.load()[["symbol", "announced"]].dropna()
+    return a.assign(symbol=a.symbol.astype(str))
+
+
+def _turnover20(ticker, d5):
+    """20-day average daily turnover, ₹ crore: NSE500 daily store, else (5 F&O names outside it) the 5m bars."""
+    try:
+        d = data.load(ticker, "nse500")
+    except IndexError:
+        d = (d5.close * d5.volume).groupby(d5.index.normalize()).sum().to_frame("tv")
+        return d.tv.iloc[-21:-1].mean() / 1e7
+    return (d.close * d.volume).iloc[-20:].mean() / 1e7
+
+
+def _universe_check(ticker, d5, lists):
+    """Spec universe filters on the latest 5m bar -> (turnover ₹ cr, [failed filters], results-day tag)."""
+    days = d5.index.normalize().unique()
+    close = d5.close.iloc[-1]
+    prev = d5.close[d5.index < days[-1]].iloc[-1] if len(days) > 1 else np.nan
+    tv, why = _turnover20(ticker, d5), []
+    if not 100 <= close <= 5000:
+        why.append("price")
+    if not tv >= 50:
+        why.append("turnover")
+    for k in ("asm", "gsm"):
+        if lists[k] is None:
+            why.append(f"{k.upper()} unknown")
+        elif ticker in lists[k]:
+            why.append(k.upper())
+    band = lists["band"].get(ticker)  # NaN = "No Band": F&O stocks get NSE's 10% dynamic operating range (flexes 5%)
+    if abs(close / prev - 1) * 100 >= (10 if band is None or np.isnan(band) else band) - 2:
+        why.append("near band")
+    a = _announced(str(days[-1].date()))
+    lo = (days[-2] if len(days) > 1 else days[-1] - pd.Timedelta(days=1)) + pd.Timedelta("15h30min")
+    res = bool(((a.symbol == ticker) & (a.announced > lo) & (a.announced <= days[-1] + pd.Timedelta("15h30min"))).any())
+    return tv, why, res
+
+
+def yd_screen():
+    """Rank F&O stocks by VS_time at their latest 5m bar (store + live bars; no Angel calls). Top 5 passing = tradeable."""
+    from cpd import angel, yd
+
+    _fresh()
+    frames, rows = _live_frames("FIVE_MINUTE"), []
+    lists = _nse_lists(str(pd.Timestamp.now(tz="Asia/Kolkata").date()))
+    for t in angel.fo_stocks():
+        p = angel.STORE / "FIVE_MINUTE" / f"{t}.parquet"
+        if not p.exists():
+            continue
+        d = _with_live(pd.read_parquet(p), t, frames)
+        d = d.loc[d.index[-1].normalize() - pd.Timedelta(days=40):]
+        vs, eod = yd.volume_shock(d)
+        tv, why, res = _universe_check(t, d, lists)
+        rows.append(dict(ticker=t, bar=d.index[-1], vs_time=vs.vs_time.iloc[-1], vs_raw=vs.vs_raw.iloc[-1],
+                         vs_eod=eod.iloc[-1] if len(eod) else None, eod_day=str(eod.index[-1].date()) if len(eod) else None,
+                         close=d.close.iloc[-1], turnover=tv, ok=not why, why=", ".join(why), results=res))
+    last = max(r["bar"] for r in rows)
+    rows = sorted([r for r in rows if r["bar"].date() == last.date()], key=lambda r: -(r["vs_time"] if r["vs_time"] == r["vs_time"] else -1))
+    k = 0
+    for r in rows:
+        k += r["ok"] and r["vs_time"] == r["vs_time"]
+        r.update(rank=k if r["ok"] and r["vs_time"] == r["vs_time"] else None, bar=bus.t(r["bar"], False))
+    return dict(asof=bus.t(last, False), session=str(last.date()), slot=f"{last + pd.Timedelta('5min'):%H:%M}",
+                universe=len(angel.fo_stocks()), covered=len(rows), top=[r["ticker"] for r in rows if r["rank"] and r["rank"] <= 5],
+                lists=dict(asm=lists["asm"] is not None, gsm=lists["gsm"] is not None, band="sec_list.csv; F&O = 10% dynamic range"),
+                rows=rows)
+
+
+def yd_overlay(r, df, ticker, interval, start, rc=None):
+    """Yd strategy marks on a candles RunResult: signal/exit markers, OR + VWAP lines, trades, levels, VS stats."""
+    from cpd import angel, yd
+
+    daily = interval == "1D"
+    tf = lambda x: bus.t(x, daily)
+    st = r["stats"] = {}
+    if daily:
+        e = yd.vs_eod_daily(df)
+        st.update(VS_EOD=e.iloc[-1], VS_EOD_day=str(df.index[-1].date()))
+        r["markers"] = [dict(time=tf(i), dir=0, text=f"VS {v:.1f}x") for i, v in e[(e.index >= start) & (e >= yd.VS_MIN)].items()]
+        r["note"] = ("1D: VS_EOD = day volume / previous 5 days' average (StockEdge Volume Shockers), dots at >= 2x. "
+                     "Next-day planning list; the setups run on 1m-15m.")
+        return r
+    d = df.loc[df.index[-1].normalize() - pd.Timedelta(days=40):]
+    a = yd.analyze(d)
+    vs, step = a["vs"], a["step"]
+    st.update(VS_time=vs.vs_time.iloc[-1], VS_raw=vs.vs_raw.iloc[-1])
+    if np.isnan(vs.vs_time.iloc[-1]):
+        st["vs_note"] = f"VS needs 5 previous full sessions of these bars; the store has {len(a['eod'])} (fills daily)"
+    if len(a["eod"]):
+        st.update(VS_EOD=a["eod"].iloc[-1], VS_EOD_day=str(a["eod"].index[-1].date()))
+    try:  # universe filters on 5m bars (what the screen uses), rank from the last screen
+        d5 = d if interval == "FIVE_MINUTE" else _with_live(pd.read_parquet(angel.STORE / "FIVE_MINUTE" / f"{ticker}.parquet"), ticker,
+                                                              _live_frames("FIVE_MINUTE"))
+        tv, why, res = _universe_check(ticker, d5.iloc[-3000:], _nse_lists(str(pd.Timestamp.now(tz="Asia/Kolkata").date())))
+        st.update(turnover20_cr=tv, universe="ok" if not why else ", ".join(why), results_day="yes" if res else "no")
+        sc = json.loads(rc.get("cpd:yd:screen") or "{}") if rc else {}
+        row = next((x for x in sc.get("rows", []) if x["ticker"] == ticker), None)
+        st.update(rank=row["rank"] if row and row["rank"] else "-", screen_slot=sc.get("slot", "-"))
+    except Exception as e:
+        log("yd universe", ticker, repr(e))
+    vw, day = a["vwap"], d.index.normalize()
+    for dd, (orh, orl) in a["orng"][a["orng"].index >= start.normalize()].iterrows():
+        seg = d.index[day == dd]
+        r["lines"] += [dict(points=[dict(time=tf(seg[0]), value=v), dict(time=tf(seg[-1]), value=v)], dir=k,
+                            label=lab if dd == day[-1] else None) for v, k, lab in ((orh, 1, "OR high"), (orl, -1, "OR low"))]
+    for dd in day[d.index >= start].unique():
+        m = (day == dd) & (d.index >= start)
+        r["lines"].append(dict(points=[dict(time=tf(i), value=v) for i, v in vw[m].dropna().items()], dir=0,
+                               label="VWAP" if dd == day[-1] else None))
+    T = lambda x: tf(x) if x is not None else None
+    r["trades"] = [dict({k: v for k, v in x.items() if k not in ("signal", "entryTime", "exitTime")},
+                        signal=T(x["signal"]), entryTime=T(x.get("entryTime")), exitTime=T(x.get("exitTime"))) for x in a["trades"]]
+    for x in a["trades"]:
+        if x["status"] == "skip" or x["signal"] < start:
+            continue
+        r["markers"].append(dict(time=tf(x.get("entryTime") or x["signal"]), dir=x["side"], text=f"{x['setup']} {x['vs_time']:.1f}x"))
+        if x.get("exitTime") is not None:
+            r["markers"].append(dict(time=tf(x["exitTime"]), dir=0, text=f"{x['R']:+.1f}R {x['reason']}"))
+    live = [x for x in a["trades"] if x["status"] != "skip"]
+    today = [x for x in live if x["date"] == str(d.index[-1].date())]  # older trades stay in the list, not as chart levels
+    if today:
+        x = today[-1]
+        r["paperTrade"] = dict(signal=tf(x["signal"]), why=f"Setup {x['setup']} {'long' if x['side'] > 0 else 'short'}, "
+                               f"VS_time {x['vs_time']:.2f}", entry=x["entry"], stop=x["stop"], target=x["target"],
+                               status=x["status"] if x["status"] != "closed" else x["reason"],
+                               detail=f"exit {x['exit']:.2f} at {x['exitTime']:%H:%M}, net {x.get('net_R', x['R']):+.2f}R after fees"
+                               if x["status"] == "closed" else x.get("reason", ""),
+                               R=x.get("R"), entryTime=T(x.get("entryTime")))
+        if x["status"] in ("pending", "open"):
+            r["levels"] = [dict(title=k, price=x[k]) for k in ("entry", "stop", "target")]
+    x = live[-1] if live and live[-1].get("qty") else None
+    if x is None:  # no sized setup yet: a 1%-stop long at the last close, ₹50,000 equity
+        c0 = d.close.iloc[-1]
+        q, _ = yd.size(50_000, c0, c0 * 0.99)
+        x = dict(cost_R=yd.costs(q, c0, c0) / (q * c0 * 0.01), cost_R_slip=(yd.costs(q, c0, c0) + yd.SLIP * 2 * q * c0) / (q * c0 * 0.01))
+        st["cost_basis"] = "1% stop at the last close, ₹50k"
+    else:
+        st["cost_basis"] = f"latest setup ({x['setup']}), ₹50k"
+    st.update(cost_R=x["cost_R"], breakeven=yd.breakeven(x["cost_R"]), breakeven_slip=yd.breakeven(x["cost_R_slip"]))
+    if a["orng"].empty:
+        r["note"] = (f"Setups not defined on this timeframe: a {step.seconds // 60}-min bar spans past the 09:15-09:30 opening "
+                     "range. VS_time is per slot of this timeframe; use 1m-15m for entries.")
+    else:
+        r["note"] = (f"Arrows = entries (setup, VS_time), dots = exits in R. Lines: opening range (09:15-09:30) and session "
+                     f"VWAP. Bar counts scaled to {step.seconds // 60}-min bars: time exit {round(60 / (step.seconds / 60))} bars.")
+    return r
+
+
+def raw(job, rc=None):
+    """Candles + the Yd strategy (the Yd page), fetched with the job's Angel One profile."""
     ticker, interval = str(job.get("ticker", "")).upper(), job.get("interval") or "1D"
     r = dict(model="", kind="rule", ticker=ticker, interval=interval, asof=None, candles=[], markers=[], boxes=[], lines=[],
              levels=[], forecast=None, score=None, paperTrade=None, note="")
     try:
-        d = candles(ticker, interval, job.get("profile") or None).iloc[-min(max(int(job.get("bars") or 1000), 30), 5000):]
+        df = candles(ticker, interval, job.get("profile") or None)
+        d = df.iloc[-min(max(int(job.get("bars") or 1000), 30), 5000):]
         tf = lambda x: bus.t(x, interval == "1D")
         r.update(asof=tf(d.index[-1]), candles=[dict(time=tf(i), open=o, high=h, low=lo, close=c, volume=v)
                                                 for i, o, h, lo, c, v in zip(d.index, d.open, d.high, d.low, d.close, d.volume)])
+        if job.get("profile") == "yd":
+            try:
+                yd_overlay(r, df, ticker, interval, d.index[0], rc)
+            except Exception as e:
+                log("yd strategy failed", ticker, interval, repr(e))
+                r["note"] = f"Strategy failed: {type(e).__name__}: {e}"
     except Exception as e:
         log("candles failed", ticker, interval, repr(e))
         r["error"] = f"{type(e).__name__}: {e}"
@@ -349,7 +549,14 @@ def raw(job):
 def handle(rc, job):
     t0 = time.time()
     if job.get("type") == "candles":
-        out = raw(job)
+        out = raw(job, rc)
+    elif job.get("type") == "yd_screen":
+        try:
+            out = yd_screen()
+            rc.set("cpd:yd:screen", bus.dumps(out))
+        except Exception as e:
+            out = dict(error=f"{type(e).__name__}: {e}")
+        out = dict(out, id=job.get("id", ""))
     elif job.get("type") == "refresh_board":
         _fresh()
         try:
