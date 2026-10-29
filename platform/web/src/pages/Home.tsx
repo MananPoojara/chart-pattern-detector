@@ -60,6 +60,7 @@ export function Home() {
           <a href="#board">Board</a>
           <a href="#record">Record</a>
           <a href="#models">Models</a>
+          <a {...linkProps("/yd")}>Yd</a>
         </nav>
         <div className="nav-end">
           <ThemeToggle />

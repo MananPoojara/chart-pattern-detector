@@ -12,6 +12,8 @@
  *        Identical in-flight runs share one job; finished results cached 10 min (the Python worker is serial,
  *        so a cached view must not queue behind a slow first run); intraday entries drop when a bar for
  *        that ticker closes.
+ *   GET /api/candles?ticker=&interval=   candles only, fetched with the Yd Angel One account (Yd page). Any F&O
+ *        or NSE500 ticker; interval 1D | ONE_MINUTE | THREE_MINUTE | FIVE_MINUTE | FIFTEEN_MINUTE | ONE_HOUR. Cached 30 s.
  *   WS  /ws             {"op":"sub"|"unsub","topics":[...]} -> {"topic","data"}
  *   GET /*              static platform/web/dist with SPA fallback
  *
@@ -134,8 +136,33 @@ async function handleRun(q: URLSearchParams): Promise<Response> {
   return rawJson(await p);
 }
 
+// ---- /api/candles (Yd page) ----------------------------------------------------
+const CANDLE_INTERVALS = ["1D", "ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE", "FIFTEEN_MINUTE", "ONE_HOUR"];
+const candleCache = new Map<string, { at: number; body: string }>();
+
+async function handleCandles(q: URLSearchParams): Promise<Response> {
+  const ticker = q.get("ticker") ?? "";
+  const interval = q.get("interval") ?? "1D";
+  if (!CANDLE_INTERVALS.includes(interval)) throw new HttpError(400, `interval must be one of ${CANDLE_INTERVALS.join(", ")}`);
+  const universe = await getJSON<Record<string, string[]>>("universe");
+  if (!universe) throw new HttpError(503, "universe not available yet");
+  if (!Object.values(universe).some((l) => l.includes(ticker))) throw new HttpError(400, "unknown ticker");
+  const key = `${ticker}|${interval}`;
+  const hit = candleCache.get(key);
+  if (hit && Date.now() - hit.at < 30_000) return rawJson(hit.body);
+  let p = inflight.get("c|" + key);
+  if (!p) {
+    p = runJob({ id: crypto.randomUUID(), type: "candles", ticker, interval, profile: "yd" });
+    inflight.set("c|" + key, p);
+    p.then((body) => { if (!body.includes('"error"')) candleCache.set(key, { at: Date.now(), body }); }, () => {})
+      .finally(() => inflight.delete("c|" + key));
+  }
+  return rawJson(await p);
+}
+
 setInterval(() => {
   const now = Date.now();
+  for (const [k, v] of candleCache) if (now - v.at >= 30_000) candleCache.delete(k);
   for (const [k, v] of cache) if (now - v.at >= CACHE_MS) cache.delete(k);
 }, CACHE_MS).unref?.();
 
@@ -164,6 +191,8 @@ async function api(path: string, q: URLSearchParams): Promise<Response> {
     }
     case "/api/run":
       return handleRun(q);
+    case "/api/candles":
+      return handleCandles(q);
   }
   throw new HttpError(404, "not found");
 }

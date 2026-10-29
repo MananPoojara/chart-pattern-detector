@@ -2,6 +2,8 @@
 
 Credentials come from .env in the repo root (never committed):
   ANGEL_ONE_API_KEY, ANGEL_ONE_CLIENT_CODE, ANGEL_ONE_MPIN, ANGEL_ONE_TOTP_SECRET
+A second account ("profile") is a `#<Name>` header followed by the same keys as `# KEY=value` lines; pass
+profile="yd" for the `#Yd` block. Each profile has its own login and rate limits.
 History lands in ~/.cache/chart-pattern-detector/intraday/<INTERVAL>/<SYMBOL>.parquet and grows on every call,
 which is also the training set for intraday models later.
 """
@@ -23,16 +25,25 @@ ROOT = Path(__file__).resolve().parents[1]
 STORE = Path(OUT).parent / "intraday"
 # interval -> (bar length, max days per request, per SmartAPI docs)
 INTERVALS = {"ONE_MINUTE": ("1min", 30), "THREE_MINUTE": ("3min", 60), "FIVE_MINUTE": ("5min", 100),
-             "FIFTEEN_MINUTE": ("15min", 200), "ONE_HOUR": ("60min", 400)}
+             "FIFTEEN_MINUTE": ("15min", 200), "ONE_HOUR": ("60min", 400), "ONE_DAY": ("1D", 2000)}
 
 
-def _env():
-    e = {}
+def _env(profile=None):
+    e, sec = {}, None
     for line in (ROOT / ".env").read_text().splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = line.split("=", 1)
+        t = line.strip()
+        if t.startswith("#") and "=" not in t and " " not in t[1:].strip():
+            sec = t[1:].strip().lower() or None  # "#Yd" starts profile "yd"
+            continue
+        on = sec is None and not t.startswith("#") if profile is None else sec == profile and t.startswith("#")
+        if on and "=" in t:
+            k, v = t.lstrip("#").split("=", 1)
             e[k.strip()] = v.strip().strip('"').strip("'")
-    return {**e, **{k: v for k, v in os.environ.items() if k.startswith(("ANGEL_ONE_", "INSTRUMENT_"))}}
+    if profile is None:
+        e.update({k: v for k, v in os.environ.items() if k.startswith(("ANGEL_ONE_", "INSTRUMENT_"))})
+    elif "ANGEL_ONE_API_KEY" not in e:
+        raise RuntimeError(f"no '#{profile}' Angel One block in .env")
+    return e
 
 
 def totp(secret, t=None):
@@ -50,14 +61,15 @@ def _headers(e, jwt=None):
     return {**h, "Authorization": f"Bearer {jwt}"} if jwt else h
 
 
-_session = {}
+_sessions = {}
 
 
-def login():
-    """JWT for today; logs in again after 6 h. Kept in memory only."""
+def login(profile=None):
+    """JWT for today; logs in again after 6 h. Kept in memory only, one per profile."""
+    _session = _sessions.setdefault(profile, {})
     if _session.get("t", 0) > time.time() - 6 * 3600:
         return _session["jwt"]
-    e = _env()
+    e = _env(profile)
     for attempt in range(4):
         resp = requests.post(e.get("ANGEL_ONE_BASE_URL", "https://apiconnect.angelone.in") +
                              "/rest/auth/angelbroking/user/v1/loginByPassword", headers=_headers(e), timeout=20,
@@ -75,7 +87,7 @@ def login():
     return _session["jwt"]
 
 
-def stream(token_list, on_quote, stop):
+def stream(token_list, on_quote, stop, profile=None):
     """SmartStream v2 (WebSocket), Quote mode, NSE cash. Calls on_quote(token, ts, ltp, day_volume) per tick until
     stop (threading.Event) is set; reconnects on drops. ts = exchange time, IST, tz-naive."""
     import threading
@@ -101,9 +113,10 @@ def stream(token_list, on_quote, stop):
                 return
 
     while not stop.is_set():
-        e = _env()
+        e = _env(profile)
         try:
-            login()
+            login(profile)
+            _session = _sessions[profile]
         except Exception as err:
             print("stream login:", err, flush=True)
             stop.wait(30)
@@ -138,14 +151,23 @@ def tokens():
     return dict(zip(m.name, m.token))
 
 
-def _fetch(symbol, interval, start, end):
-    e = _env()
+@lru_cache(None)
+def fo_stocks():
+    """NSE stocks with stock futures (the F&O list), from the scrip master's NFO FUTSTK contracts."""
+    eq = tokens()  # downloads the scrip master if missing
+    m = pd.DataFrame(json.loads((STORE / "scrip_master.json").read_text()))
+    names = set(m[(m.exch_seg == "NFO") & (m.instrumenttype == "FUTSTK")].name) & set(eq)
+    return sorted(n for n in names if "NSETEST" not in n)  # exchange test contracts
+
+
+def _fetch(symbol, interval, start, end, profile=None):
+    e = _env(profile)
     body = dict(exchange="NSE", symboltoken=tokens()[symbol], interval=interval,
                 fromdate=f"{start:%Y-%m-%d %H:%M}", todate=f"{end:%Y-%m-%d %H:%M}")
     for attempt in range(4):
         resp = requests.post(e.get("ANGEL_ONE_BASE_URL", "https://apiconnect.angelone.in") +
                              "/rest/secure/angelbroking/historical/v1/getCandleData",
-                             headers=_headers(e, login()), json=body, timeout=30)
+                             headers=_headers(e, login(profile)), json=body, timeout=30)
         time.sleep(1.0)  # documented 3/s, but bursts get 403 "exceeding access rate"; 1/s holds
         try:
             r = resp.json()
@@ -161,7 +183,7 @@ def _fetch(symbol, interval, start, end):
     return d.set_index("date").astype(float)
 
 
-def history(symbol, interval="FIVE_MINUTE", days=30):
+def history(symbol, interval="FIVE_MINUTE", days=30, profile=None):
     """Stored + newly fetched candles; only finished bars (the forming bar is dropped)."""
     step, max_days = INTERVALS[interval]
     p = STORE / interval / f"{symbol}.parquet"
@@ -176,7 +198,7 @@ def history(symbol, interval="FIVE_MINUTE", days=30):
     for start, stop in spans:
         while start < stop:
             end = min(start + pd.Timedelta(days=max_days), stop)
-            parts.append(_fetch(symbol, interval, start, end))
+            parts.append(_fetch(symbol, interval, start, end, profile))
             start = end
     d = pd.concat(parts)
     d = d[~d.index.duplicated(keep="last")].sort_index()

@@ -70,20 +70,30 @@ def _fresh():
     _fresh.m = m
 
 
-def candles(ticker, interval):
+DAYS = {"ONE_MINUTE": 10, "THREE_MINUTE": 20, "FIVE_MINUTE": 60, "FIFTEEN_MINUTE": 120, "ONE_HOUR": 365}
+
+
+def candles(ticker, interval, profile=None):
+    """profile (e.g. "yd"): fetch with that Angel One account and top up stale stored candles on every call."""
+    from cpd import angel
+
     if interval == "1D":
         _fresh()
         try:
             return data.load(ticker)
         except IndexError:
+            if profile and ticker in angel.tokens():  # F&O stock outside the NSE500 daily store
+                return angel.history(ticker, "ONE_DAY", days=3650, profile=profile)
             raise ValueError(f"unknown ticker {ticker}") from None
-    from cpd import angel
-
     p = angel.STORE / interval / f"{ticker}.parquet"
+    now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
+    step = pd.Timedelta(angel.INTERVALS[interval][0])
     if p.exists():
         d = pd.read_parquet(p)
-    elif ticker in angel.tokens():  # outside the live watchlist: one history call (60 days = 1 request), then stored
-        d = angel.history(ticker, interval, days=60)
+        if profile and len(d) and now.weekday() < 5 and d.index[-1] + 2 * step <= min(now, now.normalize() + pd.Timedelta("15h30min")):
+            d = angel.history(ticker, interval, days=DAYS[interval], profile=profile)  # forward top-up: one request
+    elif ticker in angel.tokens():  # outside the live watchlist: one history call, then stored
+        d = angel.history(ticker, interval, days=DAYS.get(interval, 60), profile=profile)
     else:
         raise ValueError(f"{ticker} has no NSE cash token for {interval} candles")
     lp = angel.STORE / f"live_{interval}.parquet"
@@ -313,9 +323,27 @@ def board():
     return dict(asof=mdl["asof"], rows=rows, universe=len(today))
 
 
+def raw(job):
+    """Candles only (the Yd page; its strategy plugs in here later), fetched with the job's Angel One profile."""
+    ticker, interval = str(job.get("ticker", "")).upper(), job.get("interval") or "1D"
+    r = dict(model="", kind="rule", ticker=ticker, interval=interval, asof=None, candles=[], markers=[], boxes=[], lines=[],
+             levels=[], forecast=None, score=None, paperTrade=None, note="")
+    try:
+        d = candles(ticker, interval, job.get("profile") or None).iloc[-min(max(int(job.get("bars") or 1000), 30), 5000):]
+        tf = lambda x: bus.t(x, interval == "1D")
+        r.update(asof=tf(d.index[-1]), candles=[dict(time=tf(i), open=o, high=h, low=lo, close=c, volume=v)
+                                                for i, o, h, lo, c, v in zip(d.index, d.open, d.high, d.low, d.close, d.volume)])
+    except Exception as e:
+        log("candles failed", ticker, interval, repr(e))
+        r["error"] = f"{type(e).__name__}: {e}"
+    return dict(json.loads(bus.dumps(r)), id=job.get("id", ""))
+
+
 def handle(rc, job):
     t0 = time.time()
-    if job.get("type") == "refresh_board":
+    if job.get("type") == "candles":
+        out = raw(job)
+    elif job.get("type") == "refresh_board":
         _fresh()
         try:
             out = board()
@@ -334,7 +362,14 @@ def handle(rc, job):
 
 def startup(rc):
     rc.set("cpd:models", bus.dumps(MODELS))
-    rc.set("cpd:universe", bus.dumps(data.universe()))
+    u = data.universe()
+    try:
+        from cpd import angel
+
+        u["fo"] = angel.fo_stocks()
+    except Exception as e:
+        log("F&O list failed:", repr(e))
+    rc.set("cpd:universe", bus.dumps(u))
     try:
         rc.set("cpd:board", bus.dumps(board()))
     except Exception as e:

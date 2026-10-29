@@ -148,3 +148,13 @@ type Analog = {
 //   flags: string[]   // plain-English context mismatches, e.g. "50-DMA flat now (+0.0%); in the 6 analogs that
 //                     //  went up it was rising (median +0.8%/10 bars)"
 ```
+
+## Yd page (F&O, all timeframes)
+
+- `/yd/:ticker?tf=1m|3m|5m|15m|1h|1D` (default 15m): the F&O stock list on the left (`universe.fo`: NSE stocks with stock
+  futures, from the Angel scrip master), a candle chart, and a strategy panel (strategy to be plugged in later).
+- `GET /api/candles?ticker=&interval=` -> RunResult with candles only (last 1000 bars), cached 30 s. Job
+  `{type: "candles", ticker, interval, profile: "yd"}`: intraday candles are fetched with the **Yd Angel One account**
+  (the `#Yd` block in `.env`, its own login and rate limits) and topped up when the stored last bar is 2+ bars old.
+  Intervals: `1D` (NSE daily store; Angel ONE_DAY for F&O stocks outside NSE500), `ONE_MINUTE`, `THREE_MINUTE`,
+  `FIVE_MINUTE`, `FIFTEEN_MINUTE`, `ONE_HOUR`.

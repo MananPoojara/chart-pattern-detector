@@ -176,6 +176,7 @@ flowchart LR
   - The 68-stock watchlist (Nifty 50 plus today's board) streams live ticks.
   - Any other stock fetches 60 days of 5-minute history the first time it's opened.
   - An evening job keeps every opened stock's history growing.
+- **Yd page** (`/yd`): the 213 F&O stocks on 1m, 3m, 5m, 15m, 1h and 1D, from a second Angel One account (the `#Yd` block in `.env`, same keys commented under a `#Yd` header). A strategy panel is reserved for the Yd strategy.
 - The interfaces are documented in [`platform/CONTRACT.md`](platform/CONTRACT.md).
 
 ![Live 5-minute ChartScanAI](docs/img/app_live5m.png)

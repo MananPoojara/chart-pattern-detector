@@ -115,7 +115,7 @@ export default function Terminal({ ticker }: { ticker: string }) {
       <header className="term-bar">
         <a className="brand" {...linkProps("/")} aria-label="PatternEdge home">PatternEdge</a>
         <Quote ticker={ticker} result={shownResult && !stale ? shownResult : null} boardRow={boardRow} asof={board?.asof} />
-        <div className="term-bar-end"><ThemeToggle /></div>
+        <div className="term-bar-end"><a className="btn btn-sm" {...linkProps(`/yd/${ticker}`)}>Yd</a> <ThemeToggle /></div>
       </header>
 
       <div className="tabs" role="tablist" aria-label="Terminal panels">

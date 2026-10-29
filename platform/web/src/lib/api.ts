@@ -37,4 +37,6 @@ export const api = {
   signals: (limit = 30) => get<Signal[]>(`/api/signals?limit=${limit}`),
   run: (model: string, ticker: string, interval: Interval, signal?: AbortSignal) =>
     get<RunResult>(`/api/run?${new URLSearchParams({ model, ticker, interval })}`, signal),
+  candles: (ticker: string, interval: string, signal?: AbortSignal) =>
+    get<RunResult>(`/api/candles?${new URLSearchParams({ ticker, interval })}`, signal),
 };
