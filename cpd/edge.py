@@ -15,6 +15,7 @@ Diagnosis of the repos (details in README):
 
   python -m cpd.edge build    # features for all NSE500 stocks (cached)
   python -m cpd.edge fit [--no-patterns | --no-context]   # walk-forward predictions -> results/signals__*.csv
+  python -m cpd.edge fit --update   # nightly: refit the latest year only, keep earlier preds
 """
 import argparse
 import os
@@ -156,7 +157,7 @@ ANALOG_COLS = ["analog_p_up", "analog_fwd", "analog_ctx_p_up", "analog_ctx_fwd",
                "ma50_slope", "ma200_slope"]
 
 
-def fit(use_patterns=True, use_context=True, first_year=2018, analog=False):
+def fit(use_patterns=True, use_context=True, first_year=2018, analog=False, update=False):
     """analog=True: same model + cpd.analog features (results/analog_panel.pkl); predictions go to a *_candidate file,
     `python -m cpd.analog eval` decides whether they beat PatternEdge out of sample."""
     from sklearn.ensemble import HistGradientBoostingRegressor
@@ -179,6 +180,8 @@ def fit(use_patterns=True, use_context=True, first_year=2018, analog=False):
     lo, hi = np.nanpercentile(y, [1, 99])
     y = np.clip(y, lo, hi)
     ud = np.sort(panel.date.unique())
+    if update:  # nightly: refit only the latest year (earlier years' walk-forward preds don't change)
+        first_year = pd.Timestamp(ud[-1]).year
     tag = "PatternEdge" if use_patterns and use_context else "ContextOnly" if use_context else "PatternsOnly"
     tag += "Analog" if analog else ""
     cols = (CTX_COLS if use_context else []) + (["active_bull", "active_bear"] if use_patterns else []) + extra
@@ -204,6 +207,10 @@ def fit(use_patterns=True, use_context=True, first_year=2018, analog=False):
         print(tag, Y, "train", int(train.sum()), "test", int(test.sum()),
               "rankIC", round(pd.Series(p).corr(pd.Series(y[test]), method="spearman"), 4), flush=True)
     pr = pd.concat(preds, ignore_index=True)
+    old = os.path.join(OUT, f"edge_preds_{tag}.pkl")
+    if update and not analog and os.path.exists(old):
+        o = pd.read_pickle(old)
+        pr = pd.concat([o[o.date < pd.Timestamp(f"{first_year}-01-01")], pr], ignore_index=True)
     if analog:
         pr.to_pickle(os.path.join(OUT, f"edge_preds_{tag}_candidate.pkl"))
         pd.concat(imps, axis=1).mean(1).sort_values(ascending=False).to_csv(os.path.join(OUT, f"edge_importance_{tag}.csv"))
@@ -233,5 +240,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-patterns", action="store_true", help="ablation: context features only")
     ap.add_argument("--no-context", action="store_true", help="ablation: pattern features only")
     ap.add_argument("--analog", action="store_true", help="add cpd.analog features (candidate preds, see cpd.analog eval)")
+    ap.add_argument("--update", action="store_true", help="refit the latest year only, keep earlier years' preds")
     a = ap.parse_args()
-    build() if a.cmd == "build" else fit(use_patterns=not a.no_patterns, use_context=not a.no_context, analog=a.analog)
+    build() if a.cmd == "build" else fit(use_patterns=not a.no_patterns, use_context=not a.no_context, analog=a.analog,
+                                         update=a.update)
