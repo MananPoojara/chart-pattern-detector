@@ -201,7 +201,8 @@ def fit(use_patterns=True, use_context=True, first_year=2018, analog=False, upda
         p = m.predict(X[test])
         preds.append(panel.loc[test, ["ticker", "date", "fwd"]].assign(pred=p, y=y[test]))
         if Y == first_year:  # permutation importance on the first test year (rank-IC drop would be nicer; MSE is fine)
-            sub = np.flatnonzero(test)[:: max(1, test.sum() // 20000)]
+            sub = np.flatnonzero(test & ~np.isnan(y))  # recent rows have no 10-bar outcome yet
+            sub = sub[:: max(1, len(sub) // 20000)]
             pi = permutation_importance(m, X.iloc[sub], y[sub], n_repeats=3, random_state=0)
             imps.append(pd.Series(pi.importances_mean, index=X.columns))
         print(tag, Y, "train", int(train.sum()), "test", int(test.sum()),
