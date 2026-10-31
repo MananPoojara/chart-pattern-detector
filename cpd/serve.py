@@ -291,7 +291,7 @@ def build(model, ticker, interval, bars, days, df):
                           rank=int(row["rank"]), rank_bucket=row.rank_bucket, time_exit_bars=pl["time_exit_bars"], plan_asof=mdl["asof"])
         r["drivers"] = [dict(name=NAMES.get(k, k), share=v, value=float(row[k])) for k, v in tp.drivers(mdl, row).items()]
         r["note"] = (f"Plan for the session after {mdl['asof']}: enter at the next open, exit at stop, target or after "
-                     f"{pl['time_exit_bars']} bars. {pl['action']} = expected R after costs vs the {tp.MIN_EDGE} R bar.")
+                     f"{pl['time_exit_bars']} bars. {pl['action'].capitalize()} = expected R after costs vs the {tp.MIN_EDGE} R bar.")
         return r
     r["markers"] = _markers(ev, d, tf)
     if kind != "lines":
@@ -454,8 +454,8 @@ def yd_overlay(r, df, ticker, interval, start, rc=None):
         e = yd.vs_eod_daily(df)
         st.update(VS_EOD=e.iloc[-1], VS_EOD_day=str(df.index[-1].date()))
         r["markers"] = [dict(time=tf(i), dir=0, text=f"VS {v:.1f}x") for i, v in e[(e.index >= start) & (e >= yd.VS_MIN)].items()]
-        r["note"] = ("1D: VS_EOD = day volume / previous 5 days' average (StockEdge Volume Shockers), dots at >= 2x. "
-                     "Next-day planning list; the setups run on 1m-15m.")
+        r["note"] = ("Day ratio = day volume / previous 5 days' average (StockEdge Volume Shockers); dots at 2x or more. "
+                     "For next-day planning; setups run on 1m-15m")
         return r
     d = df.loc[df.index[-1].normalize() - pd.Timedelta(days=40):]
     a = yd.analyze(d)
@@ -498,7 +498,7 @@ def yd_overlay(r, df, ticker, interval, start, rc=None):
     if today:
         x = today[-1]
         r["paperTrade"] = dict(signal=tf(x["signal"]), why=f"Setup {x['setup']} {'long' if x['side'] > 0 else 'short'}, "
-                               f"VS_time {x['vs_time']:.2f}", entry=x["entry"], stop=x["stop"], target=x["target"],
+                               f"volume {x['vs_time']:.1f}x usual", entry=x["entry"], stop=x["stop"], target=x["target"],
                                status=x["status"] if x["status"] != "closed" else x["reason"],
                                detail=f"exit {x['exit']:.2f} at {x['exitTime']:%H:%M}, net {x.get('net_R', x['R']):+.2f}R after fees"
                                if x["status"] == "closed" else x.get("reason", ""),
@@ -516,10 +516,10 @@ def yd_overlay(r, df, ticker, interval, start, rc=None):
     st.update(cost_R=x["cost_R"], breakeven=yd.breakeven(x["cost_R"]), breakeven_slip=yd.breakeven(x["cost_R_slip"]))
     if a["orng"].empty:
         r["note"] = (f"Setups not defined on this timeframe: a {step.seconds // 60}-min bar spans past the 09:15-09:30 opening "
-                     "range. VS_time is per slot of this timeframe; use 1m-15m for entries.")
+                     "range. Volume vs usual is per slot of this timeframe; use 1m-15m for entries")
     else:
-        r["note"] = (f"Arrows = entries (setup, VS_time), dots = exits in R. Lines: opening range (09:15-09:30) and session "
-                     f"VWAP. Bar counts scaled to {step.seconds // 60}-min bars: time exit {round(60 / (step.seconds / 60))} bars.")
+        r["note"] = (f"Arrows = entries, dots = exits in R. Lines = opening range (09:15-09:30) and session VWAP. "
+                     f"Time exit {round(60 / (step.seconds / 60))} bars ({step.seconds // 60}-min bars)")
     return r
 
 

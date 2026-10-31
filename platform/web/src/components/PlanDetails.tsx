@@ -1,12 +1,19 @@
 import type { RunResult } from "../lib/types";
 
 const LABELS: Record<string, string> = {
+  action: "Action",
   p_target_first: "P(target first)",
   expected_R: "Expected R",
-  rank_bucket: "Rank bucket",
+  rank: "Rank",
+  rank_bucket: "Rank group",
+  time_exit_bars: "Time exit",
+  plan_asof: "Plan from close",
 };
+const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 const fmt = (k: string, v: number | string) =>
-  typeof v !== "number" ? v : k.startsWith("p_") ? `${(v * 100).toFixed(0)}%` : v.toFixed(Math.abs(v) < 10 ? 2 : 0);
+  typeof v !== "number" ? (k === "action" ? sentence(v) : v)
+    : k.startsWith("p_") ? `${(v * 100).toFixed(0)}%` : k === "time_exit_bars" ? `${v} bars`
+    : Number.isInteger(v) ? String(v) : v.toFixed(Math.abs(v) < 10 ? 2 : 0);
 
 /** TradePlan stats + "why" drivers (share bars are a data graphic with text values). */
 export function PlanDetails({ result }: { result: RunResult }) {
@@ -19,7 +26,7 @@ export function PlanDetails({ result }: { result: RunResult }) {
       <h3 id="plan-title">What drives TradePlan's score</h3>
       {stats.length > 0 && (
         <dl className="stats">
-          {stats.map(([k, v]) => <div key={k}><dt>{LABELS[k] ?? k.replace(/_/g, " ")}</dt><dd>{fmt(k, v)}</dd></div>)}
+          {stats.map(([k, v]) => <div key={k}><dt>{LABELS[k] ?? sentence(k.replace(/_/g, " "))}</dt><dd>{fmt(k, v)}</dd></div>)}
         </dl>
       )}
       {drivers.length > 0 && (

@@ -64,13 +64,13 @@ export function Home() {
         </nav>
         <div className="nav-end">
           <ThemeToggle />
-          <a className="btn btn-sm btn-primary" {...linkProps(terminalHref(board?.rows[0]?.ticker ?? "RELIANCE"))}>Terminal</a>
+          <a className="btn btn-sm" {...linkProps(terminalHref(board?.rows[0]?.ticker ?? "RELIANCE"))}>Terminal</a>
         </div>
       </header>
 
       <main id="main">
         <section ref={hero} className="hero" aria-labelledby="hero-title">
-          <SplitHeading as="h1" id="hero-title" text="Chart patterns, tested against the NSE." className="hero-title" />
+          <SplitHeading as="h1" id="hero-title" text="Chart patterns, tested against the NSE" className="hero-title" />
           <div className="hero-side">
             <p className="lede" data-intro>
               Thirteen open-source pattern detectors were no better than chance on NSE 500 history. One ranking held up
@@ -186,7 +186,7 @@ export function Home() {
         </section>
 
         <section className="cta" aria-labelledby="cta-title">
-          <h2 id="cta-title">Open any NSE 500 stock and switch models on the same chart.</h2>
+          <h2 id="cta-title">Open any NSE 500 stock and switch models on the same chart</h2>
           <a className="btn btn-primary" {...linkProps(terminalHref(board?.rows[0]?.ticker ?? "RELIANCE"))}>Open the terminal</a>
         </section>
       </main>

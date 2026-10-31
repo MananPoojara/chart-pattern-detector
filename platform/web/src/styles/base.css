@@ -151,7 +151,7 @@ button { cursor: pointer; }
   padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px;
 }
 .feed time { color: var(--muted); font-size: 12px; }
-.feed .tk { font-weight: 600; text-decoration: none; }
+.feed .tk { font-weight: 500; text-decoration: none; }
 .feed .tk:hover { color: var(--accent-text); text-decoration: underline; }
 .feed .sig { grid-column: 2 / 4; color: var(--muted); }
 .feed .lvl { color: var(--muted); font-size: 12px; }
@@ -159,13 +159,12 @@ button { cursor: pointer; }
 @keyframes fresh { from { background: color-mix(in srgb, var(--accent) 16%, transparent); } }
 .empty { color: var(--muted); padding: 16px 0; font-size: 14px; }
 
-@keyframes shimmer { to { background-position: -200% 0; } }
 
 /* Terminal first-paint skeleton (shown while the lazy chunk loads; terminal.css isn't loaded yet) */
 .term-skel { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 .term-skel > header { height: 52px; flex: none; border-bottom: 1px solid var(--line); background: var(--surface); }
 .term-skel > div { flex: 1; display: grid; grid-template-columns: 220px 1fr 360px; }
-.term-skel > div > * { border-right: 1px solid var(--line); background: linear-gradient(90deg, transparent, var(--surface), transparent) 0 0 / 200% 100%; animation: shimmer 1.4s infinite linear; }
+.term-skel > div > * { border-right: 1px solid var(--line); background: var(--surface); }
 @media (max-width: 1023px) { .term-skel > div { grid-template-columns: 1fr; } .term-skel > div > :not(:nth-child(2)) { display: none; } }
 
 @media (prefers-reduced-motion: reduce) {

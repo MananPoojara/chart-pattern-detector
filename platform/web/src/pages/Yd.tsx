@@ -102,7 +102,7 @@ export default function Yd({ ticker }: { ticker: string }) {
           </div>
           {side === "screen" ? (
             <>
-              <h2 className="panel-title">By VS_time {screen && <span className="muted">· {screen.session.slice(5)} {screen.slot}</span>}</h2>
+              <h2 className="panel-title">By volume vs usual {screen && <span className="muted">· {screen.session.slice(5)} {screen.slot}</span>}</h2>
               <ul className="watch">
                 {screen?.rows.slice(0, 25).map((r) => (
                   <li key={r.ticker}>
@@ -117,9 +117,8 @@ export default function Yd({ ticker }: { ticker: string }) {
               </ul>
               {screen && (
                 <p className="small muted">
-                  {screen.covered}/{screen.universe} F&amp;O stocks with 5m bars. Top 5 passing price ₹100–5,000, 20-day turnover ≥ ₹50 cr,
-                  ASM/GSM {screen.lists.asm && screen.lists.gsm ? "(NSE lists)" : "(NSE lists unavailable: unknown)"} and 2% price-band
-                  filters ({screen.lists.band}). Refreshes each 5-minute bar while the market is open.
+                  {screen.covered}/{screen.universe} F&amp;O stocks. Top 5 pass price ₹100–5,000, turnover ≥ ₹50 cr, ASM/GSM and price band
+                  {screen.lists.asm && screen.lists.gsm ? "" : " (NSE ASM/GSM lists unavailable)"}. Updates every 5 minutes in session
                 </p>
               )}
             </>
@@ -162,7 +161,7 @@ export default function Yd({ ticker }: { ticker: string }) {
 
           <h2 className="panel-title">Strategy · volume shock + opening range</h2>
           {shown && <Strategy r={shown} />}
-          <p className="note small">Intraday candles come from the Yd Angel One account (finished bars; topped up each minute while the market is open). 1D is the NSE daily store. Rules are the user's design, not backtested.</p>
+          <p className="note small">Intraday bars from the Yd Angel One account, 1D from the NSE daily store. Rules not backtested</p>
         </aside>
       </main>
     </div>
@@ -177,23 +176,23 @@ function Strategy({ r }: { r: RunResult }) {
     <>
       <section className="card" aria-label="Volume shock">
         <dl className="stats">
-          <div><dt>VS_time</dt><dd className={typeof st.VS_time === "number" && st.VS_time >= 2 ? "up" : ""}>{xv(st.VS_time)}</dd></div>
-          <div><dt>VS_raw (log)</dt><dd>{xv(st.VS_raw)}</dd></div>
-          <div><dt>VS_EOD {st.VS_EOD_day ? String(st.VS_EOD_day).slice(5) : ""}</dt><dd>{xv(st.VS_EOD)}</dd></div>
+          <div><dt>Volume vs usual</dt><dd className={typeof st.VS_time === "number" && st.VS_time >= 2 ? "up" : ""}>{xv(st.VS_time)}</dd></div>
+          <div><dt>StockEdge ratio</dt><dd>{xv(st.VS_raw)}</dd></div>
+          <div><dt>Day ratio {st.VS_EOD_day ? String(st.VS_EOD_day).slice(5) : ""}</dt><dd>{xv(st.VS_EOD)}</dd></div>
           {r.interval !== "1D" && <>
-            <div><dt>Screen rank {st.screen_slot ? `· ${st.screen_slot}` : ""}</dt><dd>{num(st.rank, 0)}{typeof st.rank === "number" && st.rank <= 5 ? " · top 5" : ""}</dd></div>
+            <div><dt>Rank{st.screen_slot ? ` at ${st.screen_slot}` : ""}</dt><dd>{num(st.rank, 0)}{typeof st.rank === "number" && st.rank <= 5 ? " · top 5" : ""}</dd></div>
             <div><dt>Turnover 20d</dt><dd>{typeof st.turnover20_cr === "number" ? `₹${st.turnover20_cr.toFixed(0)} cr` : "—"}</dd></div>
             <div><dt>Results day</dt><dd>{num(st.results_day)}</dd></div>
             <div><dt>Cost in R</dt><dd>{num(st.cost_R)}</dd></div>
             <div><dt>Break-even win</dt><dd>{typeof st.breakeven === "number" ? `${(st.breakeven * 100).toFixed(0)}%` : "—"}</dd></div>
-            <div><dt>+ slippage</dt><dd>{typeof st.breakeven_slip === "number" ? `${(st.breakeven_slip * 100).toFixed(0)}%` : "—"}</dd></div>
+            <div><dt>With slippage</dt><dd>{typeof st.breakeven_slip === "number" ? `${(st.breakeven_slip * 100).toFixed(0)}%` : "—"}</dd></div>
           </>}
         </dl>
         {st.vs_note && <p className="small err">{st.vs_note}</p>}
-        {r.interval !== "1D" && <p className="small muted">Universe: {num(st.universe)}. Costs: {num(st.cost_basis)}; break-even at 1.5R.</p>}
+        {r.interval !== "1D" && <p className="small muted">Universe: {num(st.universe)}. Costs: {num(st.cost_basis)}; break-even at 1.5R</p>}
         {r.note && <p className="small muted">{r.note}</p>}
       </section>
-      {r.interval !== "1D" && (r.paperTrade ? <PaperTradeCard trade={r.paperTrade} /> : <p className="small muted">No setup on the latest session.</p>)}
+      {r.interval !== "1D" && (r.paperTrade ? <PaperTradeCard trade={r.paperTrade} /> : <p className="small muted">No setup on the latest session</p>)}
       {trades.length > 0 && (
         <section className="card" aria-label="Setups">
           <h3>Setups <span className="muted">({trades.length}, newest first)</span></h3>
@@ -206,10 +205,10 @@ function Strategy({ r }: { r: RunResult }) {
       <section className="card" aria-label="Account rules">
         <h3>Account rules</h3>
         <ul className="small yd-rules">
-          <li>Only the top 5 by VS_time; entries 09:30–11:00 (A), B by 13:30.</li>
-          <li>Max 2 trades a day; stop for the day after 2 consecutive losses or a −1% day.</li>
-          <li>Risk 0.5% of equity per trade; position ≤ 80% of equity (no MIS leverage).</li>
-          <li>No averaging down, no widening stops, flat by 15:15.</li>
+          <li>Only the top 5 by volume vs usual; entries 09:30–11:00 (A), B by 13:30</li>
+          <li>Max 2 trades a day; stop after 2 losses in a row or a −1% day</li>
+          <li>Risk 0.5% of equity per trade; position ≤ 80% of equity, no MIS leverage</li>
+          <li>No averaging down, no widening stops, flat by 15:15</li>
         </ul>
       </section>
     </>
